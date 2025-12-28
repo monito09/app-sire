@@ -29,32 +29,67 @@ class ExcelProcessor:
                 with z.open(nombre_archivo_interno) as f:
                     df = pd.read_csv(f, sep="|", encoding="latin-1", header=None, on_bad_lines='skip')
                     
-                    try:
-                        df.rename(columns={
-                            2: 'RazonSocialProveedor',
-                            3: 'FechaEmision',
-                            4: 'FechaVencimiento',
-                            6: 'Serie',
-                            7: 'Numero',
-                            10: 'TipoDoc',
-                            14: 'BaseImponible',
-                            15: 'IGV',
-                            23: 'ImporteTotal'
-                        }, inplace=True)
-                    except Exception as e:
-                        callback_status(f"Advertencia: Estructura de columnas inesperada. {str(e)}")
-
-                    df['FechaEmision'] = pd.to_datetime(df['FechaEmision'], dayfirst=True, errors='coerce')
-                    df['FechaVencimiento'] = pd.to_datetime(df['FechaVencimiento'], dayfirst=True, errors='coerce')
-
-                    df['CondicionPago'] = np.where(
-                        (df['FechaVencimiento'].notnull()) & (df['FechaVencimiento'] > df['FechaEmision']),
-                        'CREDITO',
-                        'CONTADO'
-                    )
+                    # --- CORRECCIÓN DE MAPEO DE COLUMNAS (Estructura SIRE) ---
+                    # 1: Razón Social
+                    # 2: Periodo
+                    # 3: CAR
+                    # 4: Fecha Emisión
+                    # 5: Fecha Vencimiento
+                    # 6: Tipo CP
+                    # 7: Serie CP
+                    # 8: Número CP
+                    # 14: Base Imponible
+                    # 15: IGV
+                    # 23: Importe Total
                     
-                    df['DiasCredito'] = (df['FechaVencimiento'] - df['FechaEmision']).dt.days
-                    df['DiasCredito'] = df['DiasCredito'].fillna(0).astype(int)
+                    mapping = {
+                        1: 'RazonSocialProveedor',
+                        4: 'FechaEmision',
+                        5: 'FechaVencimiento',
+                        6: 'TipoDoc',
+                        7: 'Serie',
+                        8: 'Numero',
+                        14: 'BaseImponible',
+                        15: 'IGV',
+                        23: 'ImporteTotal'
+                    }
+                    
+                    df.rename(columns=mapping, inplace=True)
+
+                    # --- LIMPIEZA Y CONVERSIÓN ---
+                    
+                    # 1. Fechas y Filtrado de Cabeceras
+                    if 'FechaEmision' in df.columns:
+                        df['FechaEmision'] = pd.to_datetime(df['FechaEmision'], format='%d/%m/%Y', dayfirst=True, errors='coerce')
+                        # Eliminar filas que no tengan fecha válida (elimina cabeceras y metadata)
+                        df = df.dropna(subset=['FechaEmision'])
+
+                    if 'FechaVencimiento' in df.columns:
+                        df['FechaVencimiento'] = pd.to_datetime(df['FechaVencimiento'], format='%d/%m/%Y', dayfirst=True, errors='coerce')
+
+                    # 2. Numéricos
+                    cols_num = ['BaseImponible', 'IGV', 'ImporteTotal']
+                    for col in cols_num:
+                        if col in df.columns:
+                            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+                    
+                    # 3. Recalcular Total (para consistencia)
+                    if 'BaseImponible' in df.columns and 'IGV' in df.columns:
+                        df['ImporteTotal'] = df['BaseImponible'] + df['IGV']
+
+                    # 4. Campos Calculados
+                    if 'FechaVencimiento' in df.columns and 'FechaEmision' in df.columns:
+                        df['CondicionPago'] = np.where(
+                            (df['FechaVencimiento'].notnull()) & (df['FechaVencimiento'] > df['FechaEmision']),
+                            'CREDITO',
+                            'CONTADO'
+                        )
+                        
+                        df['DiasCredito'] = (df['FechaVencimiento'] - df['FechaEmision']).dt.days
+                        df['DiasCredito'] = df['DiasCredito'].fillna(0).astype(int)
+                    else:
+                        df['CondicionPago'] = 'CONTADO'
+                        df['DiasCredito'] = 0
 
                     if 'RazonSocialProveedor' in df.columns and 'Serie' in df.columns and 'Numero' in df.columns:
                         df['GlosaResumen'] = (

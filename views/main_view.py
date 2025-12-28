@@ -1,15 +1,17 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
+import pandas as pd
 
 class DashboardView(tk.Tk):
     def __init__(self, controller=None):
         super().__init__()
         self.controller = controller
+        self.df_actual = None
         
         # Configuración de la ventana
         self.title("Descarga Masiva SIRE SUNAT")
-        self.geometry("600x450")
-        self.resizable(False, False)
+        self.geometry("1100x650")
+        self.resizable(True, True)
         
         # Estilos
         self.style = ttk.Style()
@@ -23,49 +25,87 @@ class DashboardView(tk.Tk):
 
     def _create_widgets(self):
         # Frame Principal
-        main_frame = ttk.Frame(self, padding="20")
+        main_frame = ttk.Frame(self, padding="15")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Título
-        lbl_title = ttk.Label(main_frame, text="Sistema de Descarga SIRE", font=("Helvetica", 16, "bold"))
-        lbl_title.pack(pady=(0, 20))
+        lbl_title = ttk.Label(main_frame, text="Sistema de Descarga SIRE", font=("Helvetica", 14, "bold"))
+        lbl_title.pack(pady=(0, 10))
         
         # --- SECCIÓN DE PARÁMETROS ---
-        param_frame = ttk.LabelFrame(main_frame, text="Parámetros de Consulta", padding="15")
-        param_frame.pack(fill=tk.X, pady=10)
+        param_frame = ttk.LabelFrame(main_frame, text="Parámetros de Consulta", padding="10")
+        param_frame.pack(fill=tk.X, pady=5)
         
-        # Selección de Periodo (AHORA ES UN COMBOBOX)
+        # Selección de Periodo
         frame_combo = ttk.Frame(param_frame)
         frame_combo.pack(fill=tk.X)
         
-        ttk.Label(frame_combo, text="Seleccione Periodo:").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(frame_combo, text="Periodo:").pack(side=tk.LEFT, padx=(0, 10))
         
-        # Variable para almacenar la selección
         self.periodo_var = tk.StringVar()
-        
-        # El widget Combobox reemplaza al Entry
         self.combo_periodo = ttk.Combobox(
             frame_combo, 
             textvariable=self.periodo_var,
-            state="readonly", # Para que no puedan escribir, solo seleccionar
-            width=35
+            state="readonly",
+            width=40
         )
-        self.combo_periodo.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.combo_periodo.set("Cargando periodos...") # Texto inicial
+        self.combo_periodo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        self.combo_periodo.set("Cargando periodos...")
         
-        # Botón de Acción
+        # Botón de Descarga
         self.btn_descargar = ttk.Button(
-            main_frame, 
-            text="↓ sar", 
+            frame_combo, 
+            text=" Descargar y Visualizar", 
             command=self._on_descargar_click
         )
-        self.btn_descargar.pack(pady=15, ipadx=10, ipady=5)
+        self.btn_descargar.pack(side=tk.LEFT, padx=5)
+        
+        # --- SECCIÓN DE TABLA DE DATOS ---
+        tabla_frame = ttk.LabelFrame(main_frame, text="Datos SUNAT", padding="10")
+        tabla_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        # Frame para TreeView con scrollbars
+        tree_container = ttk.Frame(tabla_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Scrollbars
+        vsb = ttk.Scrollbar(tree_container, orient="vertical")
+        hsb = ttk.Scrollbar(tree_container, orient="horizontal")
+        
+        # TreeView
+        self.tree = ttk.Treeview(
+            tree_container,
+            yscrollcommand=vsb.set,
+            xscrollcommand=hsb.set,
+            height=15
+        )
+        
+        vsb.config(command=self.tree.yview)
+        hsb.config(command=self.tree.xview)
+        
+        # Layout
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        hsb.grid(row=1, column=0, sticky='ew')
+        
+        tree_container.grid_rowconfigure(0, weight=1)
+        tree_container.grid_columnconfigure(0, weight=1)
+        
+        # Botón de Exportación (inicialmente deshabilitado)
+        self.btn_exportar = ttk.Button(
+            tabla_frame,
+            text=" Exportar a Excel",
+            command=self._on_exportar_click,
+            state="disabled"
+        )
+        self.btn_exportar.pack(pady=5)
         
         # --- SECCIÓN DE LOGS ---
-        ttk.Label(main_frame, text="Registro de Actividad:").pack(anchor=tk.W)
+        log_frame = ttk.LabelFrame(main_frame, text="Registro de Actividad", padding="5")
+        log_frame.pack(fill=tk.X, pady=5)
         
-        self.log_area = scrolledtext.ScrolledText(main_frame, height=10, state='disabled', font=("Consolas", 9))
-        self.log_area.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        self.log_area = scrolledtext.ScrolledText(log_frame, height=6, state='disabled', font=("Consolas", 8))
+        self.log_area.pack(fill=tk.BOTH, expand=True)
 
     # --- MÉTODOS DE INTERACCIÓN ---
 
@@ -100,6 +140,10 @@ class DashboardView(tk.Tk):
     def _on_descargar_click(self):
         if self.controller:
             self.controller.iniciar_proceso()
+    
+    def _on_exportar_click(self):
+        if self.controller:
+            self.controller.exportar_excel()
 
     def log(self, message):
         self.log_area.config(state='normal')
@@ -107,12 +151,102 @@ class DashboardView(tk.Tk):
         self.log_area.see(tk.END)
         self.log_area.config(state='disabled')
 
+    def mostrar_datos_tabla(self, df):
+        """
+        Muestra los datos del DataFrame en el TreeView.
+        """
+        try:
+            # Guardar referencia al DataFrame COMPLETO (para exportar)
+            self.df_actual = df
+            
+            # Limpiar tabla
+            self.tree.delete(*self.tree.get_children())
+            
+            if df is None or df.empty:
+                self.log("No hay datos para mostrar")
+                return
+            
+            # CONFIGURAR COLUMNAS A MOSTRAR EN LA VISTA
+            # Define aquí las columnas que quieres ver en la tabla
+            # IMPORTANTE: Usar los nombres exactos que vienen del excel_processor
+            columnas_visibles = [
+                'FechaEmision',
+                'FechaVencimiento',
+                'CondicionPago',
+                'DiasCredito',
+                'RazonSocialProveedor',
+                'Serie',
+                'Numero',
+                'BaseImponible',
+                'IGV',
+                'ImporteTotal'
+            ]
+            
+            # Filtrar solo las columnas que existen en el DataFrame
+            columnas = [col for col in columnas_visibles if col in df.columns]
+            
+            # Si no hay columnas configuradas, mostrar las primeras 10
+            if not columnas:
+                columnas = list(df.columns)[:10]
+            
+            # Crear DataFrame filtrado solo para visualización
+            df_vista = df[columnas].copy()
+            self.tree['columns'] = columnas
+            self.tree['show'] = 'headings'
+            
+            # Definir encabezados
+            for col in columnas:
+                self.tree.heading(col, text=col)
+                # Ajustar ancho según el nombre de columna
+                if col in ['FechaEmision', 'FechaVencimiento']:
+                    self.tree.column(col, width=100, anchor='center')
+                elif col in ['CondicionPago']:
+                    self.tree.column(col, width=80, anchor='center')
+                elif col in ['DiasCredito']:
+                    self.tree.column(col, width=70, anchor='center')
+                elif col in ['RazonSocialProveedor', 'GlosaResumen']:
+                    self.tree.column(col, width=250, anchor='w')
+                elif col in ['Serie', 'Numero']:
+                    self.tree.column(col, width=80, anchor='center')
+                else:
+                    self.tree.column(col, width=100, anchor='e')
+            
+            # Insertar datos (limitar a 1000 registros para rendimiento)
+            max_rows = min(1000, len(df_vista))
+            for idx, row in df_vista.head(max_rows).iterrows():
+                # Formatear valores para visualización
+                valores = []
+                for col in columnas:
+                    val = row[col]
+                    if pd.isna(val):
+                        valores.append('')
+                    elif isinstance(val, pd.Timestamp):
+                        valores.append(val.strftime('%Y-%m-%d') if pd.notna(val) else '')
+                    elif isinstance(val, (int, float)):
+                        valores.append(f"{val:.2f}" if isinstance(val, float) else str(val))
+                    else:
+                        valores.append(str(val))
+                
+                self.tree.insert('', 'end', values=valores)
+            
+            # Habilitar botón de exportación
+            self.btn_exportar.config(state="normal")
+            
+            if len(df) > max_rows:
+                self.log(f"Mostrando {max_rows} de {len(df)} registros en la tabla")
+            else:
+                self.log(f"Mostrando {len(df)} registros")
+                
+        except Exception as e:
+            self.log(f"Error mostrando datos: {str(e)}")
+    
     def set_loading(self, is_loading):
         if is_loading:
             self.btn_descargar.config(state="disabled", text="Procesando...")
+            self.btn_exportar.config(state="disabled")
             self.config(cursor="watch")
         else:
-            self.btn_descargar.config(state="normal", text="↓ Descargar y Procesar")
+            self.btn_descargar.config(state="normal", text=" Descargar y Visualizar")
             self.config(cursor="")
 
     def show_info(self, title, msg):
@@ -120,3 +254,9 @@ class DashboardView(tk.Tk):
 
     def show_error(self, title, msg):
         messagebox.showerror(title, msg)
+    
+    def limpiar_tabla(self):
+        """Limpia la tabla de datos"""
+        self.tree.delete(*self.tree.get_children())
+        self.btn_exportar.config(state="disabled")
+        self.df_actual = None

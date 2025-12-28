@@ -45,38 +45,11 @@ class SunatApiService:
         except Exception as e:
             raise Exception(f"Error de conexión al solicitar propuesta: {str(e)}")
 
-    def solicitar_preliminar_compras(self, periodo, callback_status):
-        """
-        Solicita la descarga del preliminar registrado del RCE.
-        USAR para periodos que dicen 'PRESENTADO' (ya declarados).
-        Referencia: Manual Pág. 94 (Servicio 5.40)
-        Retorna el número de ticket.
-        """
-        url = f"{self.base_url}/libros/rce/preliminar/web/registroslibros/{periodo}/exportareportepreliminar"
-        
-        callback_status(f"Solicitando preliminar registrado para el periodo {periodo}...")
-        
-        params = {
-            "codTipoArchivo": "1",   # 1: CSV (Recomendado para Excel), 0: TXT
-            "codOrigenEnvio": "2"    # 2: Servicio Web API
-        }
-
-        try:
-            response = requests.get(url, headers=self._get_headers(), params=params)
-            
-            if response.status_code == 200:
-                ticket = response.json().get("numTicket")
-                if not ticket:
-                    raise Exception("La respuesta de SUNAT no contiene un número de ticket.")
-                return ticket
-            else:
-                raise Exception(f"Error solicitando preliminar: {response.status_code} - {response.text}")
-        except Exception as e:
-            raise Exception(f"Error de conexión al solicitar preliminar: {str(e)}")
+    
 
     def esperar_ticket(self, ticket, periodo, callback_status):
-        # Asegúrate de usar la ruta de RCE
-        url = f"{self.base_url}/libros/rce/gestionprocesosmasivos/web/masivo/consultaestadotickets"
+        # Endpoint de consulta de tickets usa rvierce (no rce)
+        url = f"{self.base_url}/libros/rvierce/gestionprocesosmasivos/web/masivo/consultaestadotickets"
         
         params = {
             "perIni": periodo, 
@@ -87,15 +60,22 @@ class SunatApiService:
         }
         
         intentos = 0
-        max_intentos = 30  # Aumentamos a 30 intentos (aprox 2.5 minutos)
+        max_intentos = 30
+        
+        callback_status(f"Consultando estado del ticket {ticket}...")
         
         while intentos < max_intentos:
             try:
+                callback_status(f"Intento {intentos+1}/{max_intentos} - Consultando SUNAT...")
                 response = requests.get(url, headers=self._get_headers(), params=params)
+                
+                callback_status(f"Response status: {response.status_code}")
                 
                 if response.status_code == 200:
                     data = response.json()
                     registros = data.get("registros", [])
+                    
+                    callback_status(f"Se encontraron {len(registros)} registros en la respuesta")
                     
                     # Buscamos nuestro ticket en la lista
                     ticket_data = next((item for item in registros if str(item.get("numTicket")) == str(ticket)), None)
@@ -103,11 +83,10 @@ class SunatApiService:
                     if ticket_data:
                         # Obtenemos el estado y lo normalizamos a mayúsculas para comparar
                         estado = str(ticket_data.get("desEstadoProceso", "")).upper()
-                        callback_status(f"Ticket {ticket} - Estado actual: {estado} (Intento {intentos+1})")
+                        callback_status(f"✓ Ticket encontrado - Estado: {estado}")
                         
                         if estado in ["TERMINADO", "PROCESADO", "COMPLETADO"]:
-                            # --- EXTRACCIÓN DEL ARCHIVO ---
-                            archivo_info = None
+                            callback_status("Estado TERMINADO - Extrayendo información del archivo...")
                             
                             # Intento 1: Directo en la raíz del ticket
                             archivos = ticket_data.get("archivoReporte")
@@ -118,58 +97,105 @@ class SunatApiService:
                                 if detalle and isinstance(detalle, list) and len(detalle) > 0:
                                     archivos = detalle[0].get("archivoReporte")
                             
+
                             if archivos and len(archivos) > 0:
+                                nom_archivo = archivos[0].get("nomArchivoReporte")
+                                # IMPORTANTE: El campo tiene un typo en la API de SUNAT: "Achivo" en lugar de "Archivo"
+                                cod_tipo = archivos[0].get("codTipoAchivoReporte") or archivos[0].get("codTipoArchivoReporte")
+                                
+                                # CRÍTICO: Extraer codProceso del registro (necesario para descarga)
+                                cod_proceso = ticket_data.get("codProceso")
+                                
+                                callback_status(f"Archivo encontrado: {nom_archivo}")
+                                callback_status(f"Código tipo: {cod_tipo}, Proceso: {cod_proceso}")
+                                
+                                # Esperar 10 segundos para que el archivo esté disponible
+                                #callback_status("⏳ Esperando 10 segundos para que el archivo esté disponible...")
+                                #time.sleep(10)
+                                
                                 return {
-                                    "nomArchivo": archivos[0].get("nomArchivoReporte"),
-                                    "codTipoArchivo": archivos[0].get("codTipoArchivoReporte")
+                                    "nomArchivo": nom_archivo,
+                                    "codTipoArchivo": cod_tipo or '01',
+                                    "codProceso": cod_proceso,
+                                    "periodo": periodo,
+                                    "ticket": ticket
                                 }
                             else:
-                                # Si terminó pero no hay archivos, puede ser un periodo sin movimiento
+                                callback_status("⚠ Ticket terminado pero sin archivos")
                                 raise Exception("El proceso terminó pero SUNAT no generó archivos (posiblemente sin movimientos).")
                         
                         elif "ERROR" in estado:
-                            # Si el estado contiene la palabra ERROR, detenemos la espera
                             error_msg = ticket_data.get("desError", "Error desconocido en SUNAT")
                             raise Exception(f"SUNAT rechazó el ticket: {error_msg}")
+                        else:
+                            callback_status(f"Estado: {estado} - Esperando procesamiento...")
                     else:
-                        callback_status(f"Ticket {ticket} aún no aparece en la lista...")
+                        callback_status(f"⏳ Ticket {ticket} no aparece en la lista. Esperando...")
                 
                 elif response.status_code == 429:
-                    callback_status("Demasiadas peticiones. Esperando un poco más...")
-                    time.sleep(10) # Si hay saturación, esperamos más
+                    callback_status("⚠ Demasiadas peticiones. Esperando 10 segundos...")
+                    time.sleep(10)
+                else:
+                    callback_status(f"⚠ Error HTTP {response.status_code}: {response.text[:200]}")
                 
             except Exception as e:
+                if "rechazó" in str(e) or "terminó pero" in str(e):
+                    raise e
+                callback_status(f"⚠ Excepción en consulta: {str(e)[:200]}")
                 raise e
                 
             time.sleep(5) 
             intentos += 1
         
-        raise Exception("Límite de intentos alcanzado. El servidor de SUNAT está demorando más de lo normal.")
+        raise Exception(f"Límite de intentos alcanzado ({max_intentos}). El servidor de SUNAT está demorando más de lo normal.")
 
-    def descargar_archivo(self, nombre_archivo, cod_tipo_archivo, callback_status=None):
-        # CORRECCIÓN: Se cambia 'rvierce' por 'rce' (Pág. 98 Manual v22)
-        url = f"{self.base_url}/libros/rce/gestionprocesosmasivos/web/masivo/archivoreporte"
+    def descargar_archivo(self, nombre_archivo, cod_tipo_archivo, callback_status=None, cod_proceso=None, periodo=None, ticket=None):
+        """
+        Servicio 5.32 - Descarga de archivo de reporte masivo.
+        CRÍTICO: Se requieren 6 parámetros exactos para evitar Error 500/422.
+        """
+        # Endpoint correcto según test.py funcional
+        url = f"{self.base_url}/libros/rvierce/gestionprocesosmasivos/web/masivo/archivoreporte"
         
-        if callback_status:
-            callback_status(f"Descargando archivo: {nombre_archivo}")
+        # Normalización: '0' o '00' -> '01' (formato ZIP)
+        if str(cod_tipo_archivo) in ["0", "00"]:
+            cod_tipo_archivo = "01"
         
+        # LA LLAVE MAESTRA: 6 parámetros obligatorios según test.py
         params = {
             "nomArchivoReporte": nombre_archivo,
-            "codTipoArchivoReporte": cod_tipo_archivo
+            "codTipoArchivoReporte": cod_tipo_archivo,
+            "codLibro": "080000",           # Código RCE
+            "perTributario": periodo,
+            "numTicket": ticket,
+            "codProceso": cod_proceso        # VITAL - sin esto da Error 500
+        }
+
+        if callback_status:
+            callback_status(f"Descargando: {nombre_archivo} (Proceso: {cod_proceso})")
+        
+        headers = {
+            "Authorization": f"Bearer {self.auth_service.get_token()}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         
-        response = requests.get(url, headers=self._get_headers(), params=params)
-        
-        if response.status_code == 200:
-            # Guardar el archivo en la carpeta actual
-            ruta_local = os.path.join(os.getcwd(), nombre_archivo)
-            with open(ruta_local, "wb") as f:
-                f.write(response.content)
-            return ruta_local
-        else:
-            raise Exception(f"Error en descarga: {response.status_code} - {response.text}")
-        
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            
+            if response.status_code == 200:
+                ruta_local = os.path.join(os.getcwd(), nombre_archivo)
+                with open(ruta_local, "wb") as f:
+                    f.write(response.content)
+                if callback_status:
+                    callback_status(f"✓ Descarga exitosa: {nombre_archivo}")
+                return ruta_local
+            else:
+                raise Exception(f"Error {response.status_code}: {response.text}")
+                
+        except Exception as e:
+            raise Exception(f"Fallo en descarga: {str(e)}")
 
+            
     def consultar_periodos(self):
         """
         Servicio 5.33: Consultar año y mes del RCE (Pág. 83)

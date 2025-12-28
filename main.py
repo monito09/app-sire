@@ -13,9 +13,9 @@ def main():
     app.set_controller(controller)
     controller.set_view(app)
     
-    # 4. Cargar la lista de periodos al iniciar (ESTO ES NUEVO)
+    # 4. Cargar la lista de periodos al iniciar
     # Usamos 'after' para que la ventana aparezca primero y luego cargue
-    app.after(100, controller.listar_periodos_presentados)
+    app.after(100, controller.listar_periodos)
     
     # 5. Iniciar Loop
     app.mainloop()

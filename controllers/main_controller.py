@@ -1,6 +1,7 @@
 import threading
 import json
 import os
+import time
 from services.auth_service import SunatAuthService
 from services.sunat_api import SunatApiService
 from services.excel_processor import ExcelProcessor
@@ -36,19 +37,21 @@ class MainController:
 
         # Bloquear UI
         self.view.set_loading(True)
-        self.view.log(f"Iniciando proceso para periodo: {periodo}")
+        self.view.limpiar_tabla()
         
-        # Ejecutar descarga en hilo separado
-        thread = threading.Thread(target=self._run_process_thread, args=(periodo,))
+        # Ejecutar en hilo separado para no congelar la ventana
+        thread = threading.Thread(target=self._worker_iniciar_proceso, args=(periodo,))
         thread.daemon = True
         thread.start()
+        
+        
 
-    # --- CORRECCIÓN 1: Hilo para listar periodos ---
-    def listar_periodos_presentados(self):
+    def listar_periodos(self):
         """
         Inicia la carga de periodos en un hilo secundario para no congelar la UI.
+        Carga TODOS los periodos (presentados y no presentados).
         """
-        self.view.set_loading(True) # Bloquear o mostrar carga
+        self.view.set_loading(True)
         self.view.log("Consultando periodos disponibles en SUNAT...")
         
         thread = threading.Thread(target=self._worker_listar_periodos)
@@ -57,25 +60,28 @@ class MainController:
 
     def _worker_listar_periodos(self):
         try:
-            # 1. Consultar a SUNAT (Lento)
+            # 1. Consultar a SUNAT (puede ser lento)
             todos_los_periodos = self.api_service.consultar_periodos()
             
-            periodos_presentados = []
+            periodos_lista = []
             
-            # 2. Filtrar solo los "Presentado"
+            # 2. Procesar TODOS los periodos con su estado
             for p in todos_los_periodos:
-                estado = p.get('desEstado', '').upper()
+                estado = p.get('desEstado', 'Sin estado')
                 periodo = p.get('perTributario')
                 
-                if "PRESENTADO" in estado:
-                    periodos_presentados.append({
+                if periodo:
+                    periodos_lista.append({
                         "periodo": periodo,
-                        "descripcion": f"{periodo} - {p.get('desEstado')}"
+                        "descripcion": f"{periodo} - {estado}"
                     })
             
+            # Ordenar por periodo descendente (más recientes primero)
+            periodos_lista.sort(key=lambda x: x['periodo'], reverse=True)
+            
             # 3. Actualizar UI (Thread-safe usando after)
-            self.view.after(0, lambda: self.view.actualizar_combo_periodos(periodos_presentados))
-            self.view.after(0, lambda: self.view.log(f"Se encontraron {len(periodos_presentados)} periodos presentados."))
+            self.view.after(0, lambda: self.view.actualizar_combo_periodos(periodos_lista))
+            self.view.after(0, lambda: self.view.log(f"Se encontraron {len(periodos_lista)} periodos disponibles."))
 
         except Exception as e:
             error_msg = str(e)
@@ -86,53 +92,93 @@ class MainController:
             self.view.after(0, lambda: self.view.set_loading(False))
 
     # --- CORRECCIÓN 2: Bloque Finally en descarga ---
-    def _run_process_thread(self, periodo):
+    def _worker_iniciar_proceso(self, periodo):
         try:
-            # Helper para log
             def update_log(msg):
                 self.view.after(0, lambda: self.view.log(msg))
 
-            ticket = None
-            nombre_archivo = None
-            cod_tipo_archivo = None
+            # 1. Solicitar Propuesta
+            ticket = self.api_service.solicitar_propuesta_compras(periodo, update_log)
+            update_log(f"Ticket generado: {ticket}")
 
-            update_log(f"Procesando periodo PRESENTADO: {periodo}")
+            # 2. Esperar a que el ticket termine
+            info_archivo = self.api_service.esperar_ticket(ticket, periodo, update_log)
             
-            try:
-                # 1. Solicitar Preliminar
-                ticket = self.api_service.solicitar_preliminar_compras(periodo, update_log)
-                update_log(f"Ticket preliminar generado: {ticket}")
+            if info_archivo and info_archivo.get('nomArchivo'):
+                nombre_zip = info_archivo['nomArchivo']
+                cod_tipo = info_archivo.get('codTipoArchivo', '01')
+                cod_proceso = info_archivo.get('codProceso')
                 
-                # 2. Esperar ticket (devuelve diccionario ahora)
-                datos_archivo = self.api_service.esperar_ticket(ticket, periodo, update_log)
-                nombre_archivo = datos_archivo["nomArchivo"]
-                cod_tipo_archivo = datos_archivo["codTipoArchivo"]
+                # Pausa adicional: SUNAT a veces dice 'TERMINADO' pero el archivo no está listo
+                #update_log("⏳ Ticket terminado. Esperando sincronización del servidor (10s)...")
+                #time.sleep(10)
+
+                # 3. Descargar el archivo con los 6 parámetros críticos
+                update_log(f"Descargando archivo con código de proceso: {cod_proceso}...")
+                ruta_zip = self.api_service.descargar_archivo(
+                    nombre_archivo=nombre_zip,
+                    cod_tipo_archivo=cod_tipo,
+                    callback_status=update_log,
+                    cod_proceso=cod_proceso,
+                    periodo=periodo,
+                    ticket=ticket
+                )
+
+                # 4. PROCESAR EL ZIP (Lo que faltaba)
+                # Usamos el excel_processor para leer el contenido del ZIP descargado
+                update_log("📦 Extrayendo y procesando datos del archivo ZIP...")
+                df = self.excel_processor.procesar_zip(ruta_zip, update_log)
                 
-                update_log(f"Archivo listo: {nombre_archivo}")
+                # 5. ACTUALIZAR VISTA
+                # Guardamos el DataFrame en la vista y lo mostramos en la tabla
+                self.view.df_actual = df
+                self.view.after(0, lambda: self.view.mostrar_datos_tabla(df))
                 
-                # 3. Descargar
-                ruta_zip = self.api_service.descargar_archivo(nombre_archivo, cod_tipo_archivo, update_log)
-                
-                # 4. Procesar Excel
-                ruta_excel = self.excel_processor.procesar_zip(ruta_zip, update_log)
-                update_log(f"✅ Excel generado: {ruta_excel}")
-                
-                # Mensaje final de éxito
-                self.view.after(0, lambda: self.view.show_info("Éxito", f"Archivo generado:\n{ruta_excel}"))
-                
-            except Exception as e:
-                # Manejo específico del error 1070
-                if "1070" in str(e):
-                    update_log(f"⚠️ El periodo {periodo} no tiene movimientos.")
-                    self.view.after(0, lambda: self.view.show_info("Información", "El periodo seleccionado no tiene movimientos de compras."))
-                else:
-                    raise e
+                update_log(f"✅ Proceso completado. {len(df)} registros cargados.")
+                self.view.after(0, lambda: self.view.show_info("Éxito", f"Se han cargado {len(df)} comprobantes."))
+            
+            else:
+                raise Exception("No se encontró información del archivo en el ticket.")
 
         except Exception as e:
             error_msg = str(e)
-            self.view.after(0, lambda: self.view.log(f"❌ ERROR: {error_msg}"))
-            self.view.after(0, lambda: self.view.show_error("Error", error_msg))
+            update_log(f"❌ ERROR: {error_msg}")
+            self.view.after(0, lambda: self.view.show_error("Error en el Proceso", error_msg))
         
         finally:
-            # IMPORTANTE: Siempre desbloquear la interfaz al terminar (éxito o error)
+            self.view.after(0, lambda: self.view.set_loading(False))
+    
+    def exportar_excel(self):
+        """
+        Exporta los datos actuales de la tabla a Excel.
+        """
+        if self.view.df_actual is None or self.view.df_actual.empty:
+            self.view.show_error("Error", "No hay datos para exportar. Primero descargue un periodo.")
+            return
+        
+        self.view.set_loading(True)
+        self.view.log("Iniciando exportación a Excel...")
+        
+        thread = threading.Thread(target=self._worker_exportar_excel)
+        thread.daemon = True
+        thread.start()
+    
+    def _worker_exportar_excel(self):
+        try:
+            def update_log(msg):
+                self.view.after(0, lambda: self.view.log(msg))
+            
+            # Exportar usando el procesador
+            ruta_excel = self.excel_processor.exportar_a_excel(
+                df=self.view.df_actual,
+                callback_status=update_log
+            )
+            
+            update_log(f"✅ Excel guardado: {ruta_excel}")
+            self.view.after(0, lambda: self.view.show_info("Éxito", f"Archivo generado:\n{ruta_excel}"))
+            
+        except Exception as e:
+            update_log(f"❌ Error en exportación: {str(e)}")
+            self.view.after(0, lambda: self.view.show_error("Error de Exportación", str(e)))
+        finally:
             self.view.after(0, lambda: self.view.set_loading(False))
