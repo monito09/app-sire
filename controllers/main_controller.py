@@ -5,6 +5,7 @@ import time
 from services.auth_service import SunatAuthService
 from services.sunat_api import SunatApiService
 from services.excel_processor import ExcelProcessor
+from services.sunat_pdf_downloader import SunatPdfDownloader
 
 class MainController:
     def __init__(self):
@@ -15,6 +16,7 @@ class MainController:
         self.auth_service = SunatAuthService(self.config)
         self.api_service = SunatApiService(self.auth_service)
         self.excel_processor = ExcelProcessor()
+        self.pdf_downloader = SunatPdfDownloader(self.config)
 
     def set_view(self, view):
         self.view = view
@@ -33,6 +35,45 @@ class MainController:
         thread.daemon = True
         thread.start()
 
+    def ver_pdf(self, ruc_proveedor, serie, numero):
+        """
+        Lógica inteligente para ver PDF:
+        1. Busca si ya existe en downloads/pdf.
+        2. Si no, lo descarga usando el scraper.
+        3. Finalmente lo abre.
+        """
+        if not all([ruc_proveedor, serie, numero]):
+            self.view.show_error("Error", "Faltan datos para buscar el PDF (RUC, Serie o Número).")
+            return
+
+        nombre_pdf = f"{serie}-{numero}.pdf"
+        ruta_pdf = os.path.join(os.getcwd(), 'downloads', 'pdf', nombre_pdf)
+        
+        if os.path.exists(ruta_pdf):
+            self.view.log(f"Abrinedo PDF local: {nombre_pdf}")
+            os.startfile(ruta_pdf)
+        else:
+            # Descargar en hilo separado
+            self.view.log(f"PDF no encontrado localmente. Iniciando descarga de SUNAT...")
+            self.view.set_loading(True)
+            self._run_async(self._worker_descargar_pdf, ruc_proveedor, serie, numero)
+
+    def _worker_descargar_pdf(self, ruc_proveedor, serie, numero):
+        try:
+            def update_log(msg):
+                self.view.after(0, lambda: self.view.log(msg))
+            
+            ruta_pdf = self.pdf_downloader.download_pdf(ruc_proveedor, serie, numero, update_log)
+            
+            update_log(f"✅ PDF Descargado: {ruta_pdf}")
+            self.view.after(0, lambda: os.startfile(ruta_pdf))
+            
+        except Exception as e:
+            update_log(f"❌ Error descargando PDF: {str(e)}")
+            self.view.after(0, lambda: self.view.show_error("Error de Descarga", f"No se pudo descargar el PDF.\n\nDetalle: {str(e)}"))
+        finally:
+            self.view.after(0, lambda: self.view.set_loading(False))
+
     def iniciar_proceso(self):
         periodo = self.view.get_periodo()
         
@@ -47,6 +88,7 @@ class MainController:
         
         # Ejecutar en hilo separado
         self._run_async(self._worker_iniciar_proceso, periodo)
+
 
     def listar_periodos(self):
         """

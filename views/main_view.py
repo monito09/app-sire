@@ -28,7 +28,8 @@ class DashboardView(ttk.Window):
             'BaseImponible': (120, 'e'),
             'IGV': (110, 'e'),
             'ImporteTotal': (120, 'e'),
-            'GlosaResumen': (300, 'w')
+            'GlosaResumen': (300, 'w'),
+            'PDFAccion': (80, 'center')
         }
         
         self._create_layout()
@@ -42,7 +43,7 @@ class DashboardView(ttk.Window):
         header_frame.pack(fill=X)
         
         ttk.Label(header_frame, text="SIRE DOWNLOADER", font=("Helvetica", 20, "bold"), bootstyle="primary").pack(side=LEFT)
-        ttk.Label(header_frame, text="v2.0", font=("Helvetica", 10), bootstyle="secondary").pack(side=LEFT, padx=10, pady=(10,0))
+        ttk.Label(header_frame, text="v2.1", font=("Helvetica", 10), bootstyle="secondary").pack(side=LEFT, padx=10, pady=(10,0))
 
         # 2. Barra de Acciones (Periodo + Botones)
         action_bar = ttk.Frame(self, padding=(20, 0, 20, 20))
@@ -135,7 +136,10 @@ class DashboardView(ttk.Window):
             self.tree.column(col, width=width, anchor=anchor)
 
         # Binding para doble click (copiar celda)
-        self.tree.bind("<Double-1>", self._on_double_click)
+        # self.tree.bind("<Double-1>", self._on_double_click)
+        
+        # Binding para click simple (detectar Click en PDF)
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
 
         # 6. Status Bar / Progress
         status_frame = ttk.Frame(self, padding=(5, 2))
@@ -147,49 +151,47 @@ class DashboardView(ttk.Window):
         self.progress = ttk.Progressbar(status_frame, mode='indeterminate', length=200, bootstyle="success-striped")
         # El progress se mostrará solo cuando sea necesario
 
-    def _on_double_click(self, event):
+    def _on_tree_click(self, event):
         """
-        Muestra un Entry sobre la celda al hacer doble click para permitir copiar el texto.
+        Detecta clics en la columna PDF para iniciar descarga.
         """
-        # Identificar qué se clickeó
         region = self.tree.identify("region", event.x, event.y)
         if region != "cell":
             return
-
-        # Obtener coordenadas y datos
-        column = self.tree.identify_column(event.x) # e.g. #1
+            
+        column = self.tree.identify_column(event.x) # Returns '#1', '#2'...
         row_id = self.tree.identify_row(event.y)
         
-        if not row_id:
+        if not row_id: 
             return
-
-        # Obtener valor de la celda
+            
+        # Mapear #N a nombre de columna
+        # columns = list(self.COLUMN_CONFIG.keys())
+        # El índice es int(column.replace('#', '')) - 1
         col_idx = int(column.replace('#', '')) - 1
-        values = self.tree.item(row_id, 'values')
+        col_name = list(self.COLUMN_CONFIG.keys())[col_idx]
         
-        if col_idx < 0 or col_idx >= len(values):
-            return
+        if col_name == 'PDFAccion':
+            item = self.tree.item(row_id)
+            values = item['values']
             
-        cell_value = values[col_idx]
+            # Necesitamos extraer RUC, Serie y Numero
+            # Esto depende del orden de las columnas en self.COLUMN_CONFIG
+            
+            # Índices en values (dependen de COLUMN_CONFIG key order)
+            keys = list(self.COLUMN_CONFIG.keys())
+            idx_ruc = keys.index('RucProveedor')
+            idx_serie = keys.index('Serie')
+            idx_numero = keys.index('Numero')
+            
+            ruc = str(values[idx_ruc])
+            serie = str(values[idx_serie])
+            numero = str(values[idx_numero])
+            
+            if self.controller:
+                self.controller.ver_pdf(ruc, serie, numero)
 
-        # Obtener posición exacta de la celda
-        x, y, width, height = self.tree.bbox(row_id, column)
-        
-        # Crear Entry temporal
-        entry = ttk.Entry(self.tree, width=width)
-        entry.place(x=x, y=y, width=width, height=height)
-        
-        entry.insert(0, cell_value)
-        entry.select_range(0, 'end')
-        entry.focus_set()
-        
-        # Eventos para cerrar el entry
-        def destroy_entry(e):
-            entry.destroy()
-            
-        entry.bind("<FocusOut>", destroy_entry)
-        entry.bind("<Return>", destroy_entry)
-        entry.bind("<Escape>", destroy_entry)
+
 
     def _create_kpi_card(self, parent, title, initial_value, color):
         card = ttk.Frame(parent, padding=10, bootstyle=f"{color}")
@@ -337,3 +339,5 @@ class DashboardView(ttk.Window):
         self.lbl_kpi_base_imponible.config(text="S/ 0.00")
         self.lbl_kpi_total_igv.config(text="S/ 0.00")
         self.lbl_kpi_importe_total.config(text="S/ 0.00")
+
+        

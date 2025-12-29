@@ -107,8 +107,10 @@ class ExcelProcessor:
                 "COMPRA A " + df['RazonSocialProveedor'].astype(str) + 
                 " DOC: " + df['Serie'].astype(str) + "-" + df['Numero'].astype(str)
             )
+            df['PDFAccion'] = "📥 VER"
         else:
             df['GlosaResumen'] = "SIN DATOS SUFICIENTES"
+            df['PDFAccion'] = ""
             
         return df
     
