@@ -11,6 +11,7 @@ class MainController:
     def __init__(self):
         self.view = None
         self.config = self._load_config()
+        self._initialize_directories()
         
         # Inicializar servicios
         self.auth_service = SunatAuthService(self.config)
@@ -28,6 +29,16 @@ class MainController:
                 return json.load(f)
         except FileNotFoundError:
             return {}
+
+    def _initialize_directories(self):
+        """Crea la estructura de carpetas necesaria."""
+        dirs = [
+            os.path.join(os.getcwd(), 'downloads', 'zip'),
+            os.path.join(os.getcwd(), 'downloads', 'excel'),
+            os.path.join(os.getcwd(), 'downloads', 'pdf')
+        ]
+        for d in dirs:
+            os.makedirs(d, exist_ok=True)
 
     def _run_async(self, target, *args):
         """Ejecuta una función en un hilo separado para no congelar la UI."""
@@ -67,6 +78,10 @@ class MainController:
             
             update_log(f"✅ PDF Descargado: {ruta_pdf}")
             self.view.after(0, lambda: os.startfile(ruta_pdf))
+            
+            # Actualizar la tabla para que cambie el icono a "📄 VER"
+            if self.view.df_actual is not None:
+                self.view.after(0, lambda: self.view.mostrar_datos_tabla(self.view.df_actual))
             
         except Exception as e:
             update_log(f"❌ Error descargando PDF: {str(e)}")

@@ -177,7 +177,7 @@ class SunatApiService:
             
             if response.status_code == 200:
                 # Asegurar que existe la carpeta downloads
-                download_dir = os.path.join(os.getcwd(), 'downloads')
+                download_dir = os.path.join(os.getcwd(), 'downloads', 'zip')
                 os.makedirs(download_dir, exist_ok=True)
                 
                 ruta_local = os.path.join(download_dir, nombre_archivo)

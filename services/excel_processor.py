@@ -107,10 +107,10 @@ class ExcelProcessor:
                 "COMPRA A " + df['RazonSocialProveedor'].astype(str) + 
                 " DOC: " + df['Serie'].astype(str) + "-" + df['Numero'].astype(str)
             )
-            df['PDFAccion'] = "📥 VER"
+            df['VerGlosaResumen'] = "📥 VER"
         else:
             df['GlosaResumen'] = "SIN DATOS SUFICIENTES"
-            df['PDFAccion'] = ""
+            df['VerGlosaResumen'] = ""
             
         return df
     
@@ -132,7 +132,7 @@ class ExcelProcessor:
                 nombre_base = f"Reporte_SIRE_{timestamp}.xlsx"
                 
                 # Guardar en la carpeta downloads
-                ruta_salida = os.path.join(os.getcwd(), 'downloads', nombre_base)
+                ruta_salida = os.path.join(os.getcwd(), 'downloads', 'excel', nombre_base)
             
             # Asegurar directorio
             os.makedirs(os.path.dirname(ruta_salida), exist_ok=True)

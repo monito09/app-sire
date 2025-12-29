@@ -28,8 +28,7 @@ class DashboardView(ttk.Window):
             'BaseImponible': (120, 'e'),
             'IGV': (110, 'e'),
             'ImporteTotal': (120, 'e'),
-            'GlosaResumen': (300, 'w'),
-            'PDFAccion': (80, 'center')
+            'VerGlosaResumen': (120, 'center') # Antes PDFAccion
         }
         
         self._create_layout()
@@ -171,7 +170,7 @@ class DashboardView(ttk.Window):
         col_idx = int(column.replace('#', '')) - 1
         col_name = list(self.COLUMN_CONFIG.keys())[col_idx]
         
-        if col_name == 'PDFAccion':
+        if col_name == 'VerGlosaResumen':
             item = self.tree.item(row_id)
             values = item['values']
             
@@ -190,8 +189,6 @@ class DashboardView(ttk.Window):
             
             if self.controller:
                 self.controller.ver_pdf(ruc, serie, numero)
-
-
 
     def _create_kpi_card(self, parent, title, initial_value, color):
         card = ttk.Frame(parent, padding=10, bootstyle=f"{color}")
@@ -274,14 +271,38 @@ class DashboardView(ttk.Window):
             
         # Filtrar columnas
         cols = list(self.COLUMN_CONFIG.keys())
-        cols_presentes = [c for c in cols if c in df.columns]
         
         # Insertar filas (limitado a 500 para UI fluida con tkinter puro)
-        # Si usáramos Tableview de ttkbootstrap podríamos paginar, pero por ahora simple
         max_rows = 1000
+        
+        # Directorio de PDFs
+        import os
+        pdf_dir = os.path.join(os.getcwd(), 'downloads', 'pdf')
+
         for idx, row in df.head(max_rows).iterrows():
             valores = []
-            for col in cols_presentes:
+            
+            # Determinar estado del PDF dinámicamente
+            estado_pdf = "📥" # Por defecto
+            if 'Serie' in row and 'Numero' in row:
+                s = str(row['Serie'])
+                n = str(row['Numero'])
+                path = os.path.join(pdf_dir, f"{s}-{n}.pdf")
+                if os.path.exists(path):
+                    estado_pdf = "📄 VER"
+                else:
+                    estado_pdf = "📥 DESCARGAR"
+
+            for col in cols:
+                # Si la columna es PDFAccion, usamos el valor calculado
+                if col == 'VerGlosaResumen':
+                    valores.append(estado_pdf)
+                    continue
+
+                if col not in row:
+                    valores.append("")
+                    continue
+
                 val = row[col]
                 if pd.isna(val):
                     valores.append("")
