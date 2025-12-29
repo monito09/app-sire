@@ -1,13 +1,22 @@
 import requests
 import time
 import os
+from typing import Optional, List, Dict, Any, Union, Callable
+
+from utils.file_utils import ensure_directory_exists, get_file_path
 
 class SunatApiService:
-    def __init__(self, auth_service):
+    """
+    Servicio encargado de la comunicación directa con la API REST de SUNAT SIRE.
+    Maneja la autenticación, solicitud de propuestas, consulta de tickets y descarga de archivos.
+    """
+    
+    def __init__(self, auth_service: Any) -> None:
         self.auth_service = auth_service
         self.base_url = "https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv" # Base URL común para SIRE
 
-    def _get_headers(self):
+    def _get_headers(self) -> Dict[str, str]:
+        """Genera los headers necesarios para la autenticación con SUNAT."""
         token = self.auth_service.get_token()
         return {
             "Authorization": f"Bearer {token}",
@@ -15,7 +24,7 @@ class SunatApiService:
             "Accept": "application/json"
         }
 
-    def solicitar_propuesta_compras(self, periodo, callback_status):
+    def solicitar_propuesta_compras(self, periodo: str, callback_status: Callable) -> str:
         """
         Solicita la descarga de la propuesta del RCE (Registro de Compras Electrónico).
         USAR SOLO para periodos NO PRESENTADOS.
@@ -39,15 +48,17 @@ class SunatApiService:
                 ticket = response.json().get("numTicket")
                 if not ticket:
                     raise Exception("La respuesta de SUNAT no contiene un número de ticket.")
-                return ticket
+                return str(ticket)
             else:
                 raise Exception(f"Error solicitando propuesta: {response.status_code} - {response.text}")
         except Exception as e:
             raise Exception(f"Error de conexión al solicitar propuesta: {str(e)}")
 
-    
-
-    def esperar_ticket(self, ticket, periodo, callback_status):
+    def esperar_ticket(self, ticket: str, periodo: str, callback_status: Callable) -> Dict[str, Any]:
+        """
+        Consulta el estado del ticket hasta que termine o falle.
+        Retorna la información del archivo generado si es exitoso.
+        """
         # Endpoint de consulta de tickets usa rvierce (no rce)
         url = f"{self.base_url}/libros/rvierce/gestionprocesosmasivos/web/masivo/consultaestadotickets"
         
@@ -98,17 +109,17 @@ class SunatApiService:
                     callback_status(f"⚠ Error HTTP {response.status_code}: {response.text[:200]}")
                 
             except Exception as e:
+                # No re-lanzamos excepciones de conexión para seguir intentando, excepto si es rechazo explícito
                 if "rechazó" in str(e) or "terminó pero" in str(e):
                     raise e
                 callback_status(f"⚠ Excepción en consulta: {str(e)[:200]}")
-                # No re-lanzamos excepciones de conexión para seguir intentando
                 
             time.sleep(5) 
             intentos += 1
         
         raise Exception(f"Límite de intentos alcanzado ({max_intentos}). El servidor de SUNAT está demorando más de lo normal.")
 
-    def _extract_file_info(self, ticket_data, periodo, ticket, callback_status):
+    def _extract_file_info(self, ticket_data: Dict[str, Any], periodo: str, ticket: str, callback_status: Callable) -> Dict[str, Any]:
         """Extrae la información del archivo desde los datos del ticket."""
         callback_status("Estado TERMINADO - Extrayendo información del archivo...")
         
@@ -142,7 +153,7 @@ class SunatApiService:
             callback_status("⚠ Ticket terminado pero sin archivos")
             raise Exception("El proceso terminó pero SUNAT no generó archivos (posiblemente sin movimientos).")
 
-    def descargar_archivo(self, nombre_archivo, cod_tipo_archivo, callback_status=None, cod_proceso=None, periodo=None, ticket=None):
+    def descargar_archivo(self, nombre_archivo: str, cod_tipo_archivo: str, callback_status: Optional[Callable] = None, cod_proceso: Optional[str] = None, periodo: Optional[str] = None, ticket: Optional[str] = None) -> str:
         """
         Servicio 5.32 - Descarga de archivo de reporte masivo.
         CRÍTICO: Se requieren 6 parámetros exactos para evitar Error 500/422.
@@ -177,10 +188,11 @@ class SunatApiService:
             
             if response.status_code == 200:
                 # Asegurar que existe la carpeta downloads
-                download_dir = os.path.join(os.getcwd(), 'downloads', 'zip')
-                os.makedirs(download_dir, exist_ok=True)
+                base_dir = os.getcwd()
+                download_dir = get_file_path(base_dir, os.path.join('downloads', 'zip'))
+                ensure_directory_exists(download_dir)
                 
-                ruta_local = os.path.join(download_dir, nombre_archivo)
+                ruta_local = get_file_path(download_dir, nombre_archivo)
                 with open(ruta_local, "wb") as f:
                     f.write(response.content)
                 if callback_status:
@@ -192,11 +204,11 @@ class SunatApiService:
         except Exception as e:
             raise Exception(f"Fallo en descarga: {str(e)}")
 
-            
-    def consultar_periodos(self):
+    def consultar_periodos(self) -> List[Dict[str, Any]]:
         """
         Servicio 5.33: Consultar año y mes del RCE (Pág. 83)
         CORREGIDO: Maneja la respuesta como una lista de ejercicios.
+        Retorna la lista de periodos encontrados.
         """
         cod_libro = "080000" 
         url = f"{self.base_url}/libros/rvierce/padron/web/omisos/{cod_libro}/periodos"
