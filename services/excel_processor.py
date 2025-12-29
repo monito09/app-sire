@@ -10,7 +10,7 @@ class ExcelProcessor:
         11: 'TipoDocProveedor',         
         4: 'FechaEmision',
         5: 'FechaVencimiento',
-        6: 'TipoDoc',
+        25: 'Moneda',
         7: 'Serie',
         9: 'Numero',
         14: 'BaseImponible',
@@ -19,7 +19,7 @@ class ExcelProcessor:
     }
 
     COLUMNS_FINAL = [
-        'FechaEmision', 'FechaVencimiento', 'CondicionPago', 'DiasCredito','TipoDocProveedor', 
+        'FechaEmision', 'FechaVencimiento', 'CondicionPago', 'Moneda','TipoDocProveedor', 
         'RucProveedor', 'RazonSocialProveedor', 'Serie', 'Numero', 
         'GlosaResumen', 'BaseImponible', 'IGV', 'ImporteTotal'
     ]
@@ -89,6 +89,7 @@ class ExcelProcessor:
             df['ImporteTotal'] = df['BaseImponible'] + df['IGV']
 
         # 4. Campos Calculados
+        
         if 'FechaVencimiento' in df.columns and 'FechaEmision' in df.columns:
             df['CondicionPago'] = np.where(
                 (df['FechaVencimiento'].notnull()) & (df['FechaVencimiento'] > df['FechaEmision']),
@@ -125,6 +126,37 @@ class ExcelProcessor:
             if df_a_exportar is None or df_a_exportar.empty:
                 raise Exception("No hay datos para exportar")
             
+            # --- ENRIQUECIMIENTO CON DESCRIPCIONES ---
+            df_final = df_a_exportar.copy()
+            xml_desc_dir = os.path.join(os.getcwd(), 'downloads', 'xml')
+            
+            def get_descripcion(row):
+                try:
+                    if 'Serie' in row and 'Numero' in row:
+                        s = str(row['Serie'])
+                        n = str(row['Numero'])
+                        txt_path = os.path.join(xml_desc_dir, f"{s}-{n}.txt")
+                        if os.path.exists(txt_path):
+                            with open(txt_path, 'r', encoding='utf-8') as f:
+                                return f.read().strip()
+                except:
+                    pass
+                return ""
+
+            if callback_status:
+                callback_status("Agregando descripciones descargadas...")
+            
+            df_final['Descripcion'] = df_final.apply(get_descripcion, axis=1)
+            
+            # Reordenar columnas para poner Descripcion después de ImporteTotal
+            cols = list(df_final.columns)
+            if 'ImporteTotal' in cols and 'Descripcion' in cols:
+                cols.remove('Descripcion')
+                idx = cols.index('ImporteTotal') + 1
+                cols.insert(idx, 'Descripcion')
+                df_final = df_final[cols]
+            # -----------------------------------------
+
             if ruta_salida is None:
                 # Generar nombre legible: Reporte_SIRE_YYYYMMDD_HHMMSS.xlsx
                 import time
@@ -138,9 +170,9 @@ class ExcelProcessor:
             os.makedirs(os.path.dirname(ruta_salida), exist_ok=True)
 
             if callback_status:
-                callback_status(f"Exportando {len(df_a_exportar)} registros a Excel...")
+                callback_status(f"Exportando {len(df_final)} registros a Excel...")
             
-            df_a_exportar.to_excel(ruta_salida, index=False)
+            df_final.to_excel(ruta_salida, index=False)
             
             if callback_status:
                 callback_status(f"Excel generado: {ruta_salida}")

@@ -19,7 +19,7 @@ class DashboardView(ttk.Window):
             'FechaEmision': (100, 'center'),
             'FechaVencimiento': (100, 'center'),
             'CondicionPago': (100, 'center'),
-            'DiasCredito': (80, 'center'),
+            'Moneda': (50, 'center'),
             'TipoDocProveedor': (80, 'center'),
             'RucProveedor': (100, 'center'), 
             'RazonSocialProveedor': (300,'center'),
@@ -28,7 +28,8 @@ class DashboardView(ttk.Window):
             'BaseImponible': (120, 'e'),
             'IGV': (110, 'e'),
             'ImporteTotal': (120, 'e'),
-            'VerGlosaResumen': (120, 'center') # Antes PDFAccion
+            'VerDescripcion': (200, 'w'),
+            'VerPDF': (120, 'center') # Antes PDFAccion
         }
         
         self._create_layout()
@@ -170,25 +171,33 @@ class DashboardView(ttk.Window):
         col_idx = int(column.replace('#', '')) - 1
         col_name = list(self.COLUMN_CONFIG.keys())[col_idx]
         
-        if col_name == 'VerGlosaResumen':
-            item = self.tree.item(row_id)
-            values = item['values']
-            
-            # Necesitamos extraer RUC, Serie y Numero
-            # Esto depende del orden de las columnas en self.COLUMN_CONFIG
-            
-            # Índices en values (dependen de COLUMN_CONFIG key order)
-            keys = list(self.COLUMN_CONFIG.keys())
-            idx_ruc = keys.index('RucProveedor')
-            idx_serie = keys.index('Serie')
-            idx_numero = keys.index('Numero')
-            
-            ruc = str(values[idx_ruc])
-            serie = str(values[idx_serie])
-            numero = str(values[idx_numero])
-            
-            if self.controller:
-                self.controller.ver_pdf(ruc, serie, numero)
+        # Obtener datos de la fila
+        item = self.tree.item(row_id)
+        values = item['values']
+        
+        # Índices en values (dependen de COLUMN_CONFIG key order)
+        keys = list(self.COLUMN_CONFIG.keys())
+        idx_ruc = keys.index('RucProveedor')
+        idx_serie = keys.index('Serie')
+        idx_numero = keys.index('Numero')
+        
+        ruc = str(values[idx_ruc])
+        serie = str(values[idx_serie])
+        numero = str(values[idx_numero])
+
+        if col_name == 'VerDescripcion':
+            # Si el texto es "📥 OBTENER", iniciamos descarga
+            current_text = str(values[keys.index('VerDescripcion')])
+            if "OBTENER" in current_text:
+                if self.controller:
+                    self.controller.descargar_comprobante(ruc, serie, numero)
+        
+        elif col_name == 'VerPDF':
+            # Si el texto es "📄 PDF", abrimos
+            current_text = str(values[keys.index('VerPDF')])
+            if "PDF" in current_text:
+                if self.controller:
+                    self.controller.abrir_pdf(ruc, serie, numero)
 
     def _create_kpi_card(self, parent, title, initial_value, color):
         card = ttk.Frame(parent, padding=10, bootstyle=f"{color}")
@@ -278,25 +287,43 @@ class DashboardView(ttk.Window):
         # Directorio de PDFs
         import os
         pdf_dir = os.path.join(os.getcwd(), 'downloads', 'pdf')
+        xml_desc_dir = os.path.join(os.getcwd(), 'downloads', 'xml')
 
         for idx, row in df.head(max_rows).iterrows():
             valores = []
             
             # Determinar estado del PDF dinámicamente
-            estado_pdf = "📥" # Por defecto
+            estado_pdf = "🚫 NO DISP."
+            desc_text = "📥 OBTENER"
+
             if 'Serie' in row and 'Numero' in row:
                 s = str(row['Serie'])
                 n = str(row['Numero'])
+                
+                # PDF
                 path = os.path.join(pdf_dir, f"{s}-{n}.pdf")
                 if os.path.exists(path):
-                    estado_pdf = "📄 VER"
-                else:
-                    estado_pdf = "📥 DESCARGAR"
+                    estado_pdf = "📄 PDF"
+                
+                # Descripción
+                txt_path = os.path.join(xml_desc_dir, f"{s}-{n}.txt")
+                if os.path.exists(txt_path):
+                    try:
+                        with open(txt_path, 'r', encoding='utf-8') as f:
+                            content = f.read().strip()
+                            if content:
+                                desc_text = content
+                    except:
+                        pass
 
             for col in cols:
                 # Si la columna es PDFAccion, usamos el valor calculado
-                if col == 'VerGlosaResumen':
+                if col == 'VerPDF':
                     valores.append(estado_pdf)
+                    continue
+                
+                if col == 'VerDescripcion':
+                    valores.append(desc_text)
                     continue
 
                 if col not in row:

@@ -1,6 +1,8 @@
 from playwright.sync_api import sync_playwright
 import time
 import os
+import zipfile
+import xml.etree.ElementTree as ET
 
 class SunatPdfDownloader:
     def __init__(self, config):
@@ -8,20 +10,76 @@ class SunatPdfDownloader:
         self.usuario_sol = config["usuario_sol"]
         self.clave_sol = config["clave_sol"]
 
+    def _extract_description_from_zip(self, zip_path, output_dir, base_name):
+        """
+        Extrae el XML del ZIP, busca las descripciones de los items y las guarda en un TXT.
+        """
+        try:
+            descripciones = []
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # Buscar archivos XML dentro del ZIP
+                xml_files = [f for f in zip_ref.namelist() if f.endswith('.xml')]
+                
+                for xml_file in xml_files:
+                    with zip_ref.open(xml_file) as xml_f:
+                        tree = ET.parse(xml_f)
+                        root = tree.getroot()
+                        
+                        # Namespaces comunes en UBL SUNAT
+                        namespaces = {
+                            'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
+                            'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'
+                        }
+                        
+                        # Buscar items (InvoiceLine o CreditNoteLine)
+                        # Intentamos buscar InvoiceLine primero
+                        lines = root.findall('.//cac:InvoiceLine', namespaces)
+                        if not lines:
+                            lines = root.findall('.//cac:CreditNoteLine', namespaces)
+                            
+                        for line in lines:
+                            item = line.find('cac:Item', namespaces)
+                            if item is not None:
+                                desc = item.find('cbc:Description', namespaces)
+                                if desc is not None and desc.text:
+                                    descripciones.append(desc.text.strip())
+            
+            # Guardar descripciones en TXT
+            if descripciones:
+                txt_path = os.path.join(output_dir, f"{base_name}.txt")
+                with open(txt_path, 'w', encoding='utf-8') as f:
+                    f.write(" | ".join(descripciones))
+                return txt_path
+            return None
+            
+        except Exception as e:
+            print(f"Error extrayendo XML: {e}")
+            return None
+
     def download_pdf(self, ruc_emisor, serie, numero, callback_status):
         """
-        Descarga el PDF de la factura usando Playwright a la carpeta downloads/pdf.
-        Retorna la ruta absoluta del archivo descargado.
-        Basado estrictamente en la lógica de test2.py.
+        Descarga el PDF y el XML de la factura usando Playwright.
+        Extrae la descripción del XML.
         """
-        callback_status(f"Iniciando descarga de PDF {serie}-{numero} de {ruc_emisor}...")
+        callback_status(f"Iniciando descarga de PDF y XML {serie}-{numero} de {ruc_emisor}...")
         
-        # Preparar directorio de descarga
-        download_dir = os.path.join(os.getcwd(), 'downloads', 'pdf')
-        os.makedirs(download_dir, exist_ok=True)
-        # Nombre final esperado
-        nombre_pdf = f"{serie}-{numero}.pdf"
-        target_path = os.path.join(download_dir, nombre_pdf)
+        # Preparar directorios
+        base_dir = os.getcwd()
+        pdf_dir = os.path.join(base_dir, 'downloads', 'pdf')
+        xml_dir = os.path.join(base_dir, 'downloads', 'xml') # Para guardar el TXT con la descripción
+        zip_dir = os.path.join(base_dir, 'downloads', 'zip') # Para guardar el ZIP descargado temporalmente
+        
+        os.makedirs(pdf_dir, exist_ok=True)
+        os.makedirs(xml_dir, exist_ok=True)
+        os.makedirs(zip_dir, exist_ok=True)
+
+        # Nombres finales
+        nombre_base = f"{serie}-{numero}"
+        nombre_pdf = f"{nombre_base}.pdf"
+        nombre_zip = f"{nombre_base}.zip"
+        
+        target_pdf_path = os.path.join(pdf_dir, nombre_pdf)
+        target_zip_path = os.path.join(zip_dir, nombre_zip)
 
         start_time = time.time()
         
@@ -165,11 +223,12 @@ class SunatPdfDownloader:
                         callback_status(f"Error en formulario (PrimeNG): {e}")
                         raise e
 
-                    # --- 5. DESCARGA DEL PDF ---
+                    # --- 5. DESCARGA DEL PDF Y XML ---
                     try:
                         callback_status("Esperando resultado...")
                         app_frame.get_by_text("Resultado", exact=True).wait_for(state="visible", timeout=20000)
                         
+                        # 5.1 Descargar PDF
                         btn_pdf = app_frame.locator("button[ngbtooltip='Descargar PDF']").first
                         btn_pdf.wait_for(state="visible", timeout=10000)
                         
@@ -179,13 +238,37 @@ class SunatPdfDownloader:
                             btn_pdf.click()
                         
                         download = download_info.value
-                        download.save_as(target_path)
+                        download.save_as(target_pdf_path)
+                        callback_status(f"✓ PDF descargado.")
+
+                        # Pausa de 1s solicitada
+                        time.sleep(1)
+
+                        # 5.2 Descargar XML
+                        try:
+                            btn_xml = app_frame.locator("button[ngbtooltip='Descargar XML']").first
+                            if btn_xml.is_visible():
+                                callback_status("Descargando XML...")
+                                with page.expect_download() as download_info_xml:
+                                    btn_xml.click()
+                                
+                                download_xml = download_info_xml.value
+                                download_xml.save_as(target_zip_path)
+                                callback_status("✓ XML descargado.")
+
+                                # 5.3 Extraer descripción
+                                self._extract_description_from_zip(target_zip_path, xml_dir, nombre_base)
+                            else:
+                                callback_status("⚠️ Botón XML no visible.")
+                        except Exception as ex_xml:
+                            callback_status(f"⚠️ Error descargando XML: {ex_xml}")
+                            # No bloqueamos si falla el XML, ya que el PDF es lo principal
                         
-                        callback_status(f"✓ ¡ÉXITO! PDF descargado.")
-                        return target_path
+                        callback_status(f"✓ ¡ÉXITO! Proceso completado.")
+                        return target_pdf_path
 
                     except Exception as e:
-                        callback_status(f"Error descargando PDF: {e}")
+                        callback_status(f"Error descargando archivos: {e}")
                         raise e
 
                 except Exception as e:

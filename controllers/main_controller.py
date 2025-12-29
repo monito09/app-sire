@@ -35,7 +35,8 @@ class MainController:
         dirs = [
             os.path.join(os.getcwd(), 'downloads', 'zip'),
             os.path.join(os.getcwd(), 'downloads', 'excel'),
-            os.path.join(os.getcwd(), 'downloads', 'pdf')
+            os.path.join(os.getcwd(), 'downloads', 'pdf'),
+            os.path.join(os.getcwd(), 'downloads', 'xml')
         ]
         for d in dirs:
             os.makedirs(d, exist_ok=True)
@@ -46,28 +47,29 @@ class MainController:
         thread.daemon = True
         thread.start()
 
-    def ver_pdf(self, ruc_proveedor, serie, numero):
+    def abrir_pdf(self, ruc_proveedor, serie, numero):
         """
-        Lógica inteligente para ver PDF:
-        1. Busca si ya existe en downloads/pdf.
-        2. Si no, lo descarga usando el scraper.
-        3. Finalmente lo abre.
+        Abre el PDF si existe localmente.
         """
         if not all([ruc_proveedor, serie, numero]):
-            self.view.show_error("Error", "Faltan datos para buscar el PDF (RUC, Serie o Número).")
             return
 
         nombre_pdf = f"{serie}-{numero}.pdf"
         ruta_pdf = os.path.join(os.getcwd(), 'downloads', 'pdf', nombre_pdf)
         
         if os.path.exists(ruta_pdf):
-            self.view.log(f"Abrinedo PDF local: {nombre_pdf}")
+            self.view.log(f"Abriendo PDF local: {nombre_pdf}")
             os.startfile(ruta_pdf)
         else:
-            # Descargar en hilo separado
-            self.view.log(f"PDF no encontrado localmente. Iniciando descarga de SUNAT...")
-            self.view.set_loading(True)
-            self._run_async(self._worker_descargar_pdf, ruc_proveedor, serie, numero)
+            self.view.show_info("PDF No Disponible", "Primero debe descargar el comprobante desde la columna 'VerDescripcion'.")
+
+    def descargar_comprobante(self, ruc_proveedor, serie, numero):
+        """
+        Inicia la descarga del PDF y XML.
+        """
+        self.view.log(f"Iniciando descarga para {serie}-{numero}...")
+        self.view.set_loading(True)
+        self._run_async(self._worker_descargar_pdf, ruc_proveedor, serie, numero)
 
     def _worker_descargar_pdf(self, ruc_proveedor, serie, numero):
         try:
@@ -76,10 +78,11 @@ class MainController:
             
             ruta_pdf = self.pdf_downloader.download_pdf(ruc_proveedor, serie, numero, update_log)
             
-            update_log(f"✅ PDF Descargado: {ruta_pdf}")
-            self.view.after(0, lambda: os.startfile(ruta_pdf))
+            update_log(f"✅ Descarga completada: {ruta_pdf}")
+            # Ya no abrimos automáticamente el PDF
+            # self.view.after(0, lambda: os.startfile(ruta_pdf))
             
-            # Actualizar la tabla para que cambie el icono a "📄 VER"
+            # Actualizar la tabla para mostrar la descripción y habilitar el PDF
             if self.view.df_actual is not None:
                 self.view.after(0, lambda: self.view.mostrar_datos_tabla(self.view.df_actual))
             
