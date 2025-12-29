@@ -127,6 +127,7 @@ class MainController:
                 # 5. ACTUALIZAR VISTA
                 # Guardamos el DataFrame en la vista y lo mostramos en la tabla
                 self.view.df_actual = df
+                # mostrar_datos_tabla ya actualiza los KPIs internamente
                 self.view.after(0, lambda: self.view.mostrar_datos_tabla(df))
                 
                 update_log(f"✅ Proceso completado. {len(df)} registros cargados.")

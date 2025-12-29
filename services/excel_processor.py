@@ -5,21 +5,23 @@ import os
 
 class ExcelProcessor:
     COLUMN_MAPPING = {
-        1: 'RazonSocialProveedor',
+        13: 'RazonSocialProveedor',
+        12: 'RucProveedor', 
+        11: 'TipoDocProveedor',         
         4: 'FechaEmision',
         5: 'FechaVencimiento',
         6: 'TipoDoc',
         7: 'Serie',
-        8: 'Numero',
+        9: 'Numero',
         14: 'BaseImponible',
         15: 'IGV',
         23: 'ImporteTotal'
     }
 
     COLUMNS_FINAL = [
-        'FechaEmision', 'FechaVencimiento', 'CondicionPago', 'DiasCredito',
-        'RazonSocialProveedor', 'Serie', 'Numero', 'GlosaResumen',
-        'BaseImponible', 'IGV', 'ImporteTotal'
+        'FechaEmision', 'FechaVencimiento', 'CondicionPago', 'DiasCredito','TipoDocProveedor', 
+        'RucProveedor', 'RazonSocialProveedor', 'Serie', 'Numero', 
+        'GlosaResumen', 'BaseImponible', 'IGV', 'ImporteTotal'
     ]
 
     def __init__(self):
@@ -63,6 +65,11 @@ class ExcelProcessor:
 
     def _clean_data(self, df):
         """Limpia y transforma los datos del DataFrame."""
+
+        if 'RazonSocialProveedor' in df.columns:
+             # Limpieza básica para quitar espacios extra
+             df['RazonSocialProveedor'] = df['RazonSocialProveedor'].astype(str).str.strip()
+
         # 1. Fechas y Filtrado de Cabeceras
         if 'FechaEmision' in df.columns:
             df['FechaEmision'] = pd.to_datetime(df['FechaEmision'], format='%d/%m/%Y', dayfirst=True, errors='coerce')
@@ -70,7 +77,7 @@ class ExcelProcessor:
 
         if 'FechaVencimiento' in df.columns:
             df['FechaVencimiento'] = pd.to_datetime(df['FechaVencimiento'], format='%d/%m/%Y', dayfirst=True, errors='coerce')
-
+        
         # 2. Numéricos
         cols_num = ['BaseImponible', 'IGV', 'ImporteTotal']
         for col in cols_num:
@@ -94,7 +101,7 @@ class ExcelProcessor:
         else:
             df['CondicionPago'] = 'CONTADO'
             df['DiasCredito'] = 0
-
+        
         if all(col in df.columns for col in ['RazonSocialProveedor', 'Serie', 'Numero']):
             df['GlosaResumen'] = (
                 "COMPRA A " + df['RazonSocialProveedor'].astype(str) + 

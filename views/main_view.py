@@ -1,141 +1,231 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+from ttkbootstrap.tableview import Tableview
+from tkinter import filedialog
 import pandas as pd
 
-class DashboardView(tk.Tk):
+class DashboardView(ttk.Window):
     def __init__(self, controller=None):
-        super().__init__()
+        super().__init__(themename="flatly")
         self.controller = controller
         self.df_actual = None
         
         # Configuración de la ventana
-        self.title("Descarga Masiva SIRE SUNAT")
-        self.geometry("1100x650")
-        self.resizable(True, True)
+        self.title("Sistema SIRE SUNAT - Dashboard")
+        self.geometry("1200x800")
         
-        # Estilos
-        self.style = ttk.Style()
-        self.style.configure("TButton", font=("Helvetica", 10))
-        self.style.configure("TLabel", font=("Helvetica", 10))
+        # Configuración de columnas: {columna: (ancho, alineación)}
+        self.COLUMN_CONFIG = {
+            'FechaEmision': (100, 'center'),
+            'FechaVencimiento': (100, 'center'),
+            'CondicionPago': (100, 'center'),
+            'DiasCredito': (80, 'center'),
+            'TipoDocProveedor': (80, 'center'),
+            'RucProveedor': (100, 'center'), 
+            'RazonSocialProveedor': (300,'center'),
+            'Serie': (80, 'center'),
+            'Numero': (80, 'center'),
+            'BaseImponible': (120, 'e'),
+            'IGV': (110, 'e'),
+            'ImporteTotal': (120, 'e'),
+            'GlosaResumen': (300, 'w')
+        }
         
-        self._create_widgets()
+        self._create_layout()
 
     def set_controller(self, controller):
         self.controller = controller
 
-    def _create_widgets(self):
-        # Frame Principal
-        main_frame = ttk.Frame(self, padding="15")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+    def _create_layout(self):
+        # 1. Header Principal
+        header_frame = ttk.Frame(self, padding=20)
+        header_frame.pack(fill=X)
         
-        # Título
-        lbl_title = ttk.Label(main_frame, text="Sistema de Descarga SIRE", font=("Helvetica", 14, "bold"))
-        lbl_title.pack(pady=(0, 10))
+        ttk.Label(header_frame, text="SIRE DOWNLOADER", font=("Helvetica", 20, "bold"), bootstyle="primary").pack(side=LEFT)
+        ttk.Label(header_frame, text="v2.0", font=("Helvetica", 10), bootstyle="secondary").pack(side=LEFT, padx=10, pady=(10,0))
+
+        # 2. Barra de Acciones (Periodo + Botones)
+        action_bar = ttk.Frame(self, padding=(20, 0, 20, 20))
+        action_bar.pack(fill=X)
         
-        # --- SECCIÓN DE PARÁMETROS ---
-        param_frame = ttk.LabelFrame(main_frame, text="Parámetros de Consulta", padding="10")
-        param_frame.pack(fill=tk.X, pady=5)
+        action_card = ttk.Labelframe(action_bar, text="Controles", padding=15, bootstyle="info")
+        action_card.pack(fill=X)
         
-        # Selección de Periodo
-        frame_combo = ttk.Frame(param_frame)
-        frame_combo.pack(fill=tk.X)
+        # Selector de Periodo
+        ttk.Label(action_card, text="Periodo Tributario:").pack(side=LEFT, padx=(0, 10))
         
-        ttk.Label(frame_combo, text="Periodo:").pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.periodo_var = tk.StringVar()
+        self.periodo_var = ttk.StringVar()
         self.combo_periodo = ttk.Combobox(
-            frame_combo, 
+            action_card, 
             textvariable=self.periodo_var,
             state="readonly",
-            width=40
+            width=35,
+            bootstyle="primary"
         )
-        self.combo_periodo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        self.combo_periodo.pack(side=LEFT, padx=(0, 20))
         self.combo_periodo.set("Cargando periodos...")
         
-        # Botón de Descarga
+        # Botones
         self.btn_descargar = ttk.Button(
-            frame_combo, 
-            text=" Descargar y Visualizar", 
-            command=self._on_descargar_click
+            action_card, 
+            text="Descargar y Procesar", 
+            command=self._on_descargar_click,
+            bootstyle="success",
+            width=20
         )
-        self.btn_descargar.pack(side=tk.LEFT, padx=5)
+        self.btn_descargar.pack(side=LEFT, padx=5)
         
-        # --- SECCIÓN DE TABLA DE DATOS ---
-        tabla_frame = ttk.LabelFrame(main_frame, text="Datos SUNAT", padding="10")
-        tabla_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.btn_exportar = ttk.Button(
+            action_card,
+            text="Exportar Excel",
+            command=self._on_exportar_click,
+            state="disabled",
+            bootstyle="success-outline",
+            width=20
+        )
+        self.btn_exportar.pack(side=LEFT, padx=5)
+
+        # 3. KPI Cards Row
+        self.kpi_frame = ttk.Frame(self, padding=(20, 0))
+        self.kpi_frame.pack(fill=X, pady=10)
         
-        # Frame para TreeView con scrollbars
-        tree_container = ttk.Frame(tabla_frame)
-        tree_container.pack(fill=tk.BOTH, expand=True)
+        self._create_kpi_card(self.kpi_frame, "Total Comprobantes", "0", "secondary")
+        self._create_kpi_card(self.kpi_frame, "Base Imponible", "S/ 0.00", "primary")
+        self._create_kpi_card(self.kpi_frame, "Total IGV", "S/ 0.00", "info")
+        self._create_kpi_card(self.kpi_frame, "Importe Total", "S/ 0.00", "success")
+
+        # 4. Buscador
+        search_frame = ttk.Frame(self, padding=(20, 5))
+        search_frame.pack(fill=X)
+        
+        ttk.Label(search_frame, text="Filtrar resultados:", bootstyle="secondary").pack(side=LEFT, padx=(0, 10))
+        self.search_var = ttk.StringVar()
+        self.search_var.trace("w", self._on_search_change)
+        
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=50)
+        search_entry.pack(side=LEFT)
+        
+        # 5. Tabla de Datos
+        table_frame = ttk.Frame(self, padding=20)
+        table_frame.pack(fill=BOTH, expand=True)
+        
+        # Usamos Treeview estándar pero con estilo de ttkbootstrap
+        self.tree = ttk.Treeview(
+            table_frame, 
+            columns=list(self.COLUMN_CONFIG.keys()), 
+            show='headings',
+            bootstyle="primary"
+        )
         
         # Scrollbars
-        vsb = ttk.Scrollbar(tree_container, orient="vertical")
-        hsb = ttk.Scrollbar(tree_container, orient="horizontal")
+        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         
-        # TreeView
-        self.tree = ttk.Treeview(
-            tree_container,
-            yscrollcommand=vsb.set,
-            xscrollcommand=hsb.set,
-            height=15
-        )
-        
-        vsb.config(command=self.tree.yview)
-        hsb.config(command=self.tree.xview)
-        
-        # Layout
         self.tree.grid(row=0, column=0, sticky='nsew')
         vsb.grid(row=0, column=1, sticky='ns')
         hsb.grid(row=1, column=0, sticky='ew')
         
-        tree_container.grid_rowconfigure(0, weight=1)
-        tree_container.grid_columnconfigure(0, weight=1)
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
         
-        # Botón de Exportación (inicialmente deshabilitado)
-        self.btn_exportar = ttk.Button(
-            tabla_frame,
-            text=" Exportar a Excel",
-            command=self._on_exportar_click,
-            state="disabled"
-        )
-        self.btn_exportar.pack(pady=5)
+        # Configurar cabeceras
+        for col, (width, anchor) in self.COLUMN_CONFIG.items():
+            self.tree.heading(col, text=col)
+            self.tree.column(col, width=width, anchor=anchor)
+
+        # Binding para doble click (copiar celda)
+        self.tree.bind("<Double-1>", self._on_double_click)
+
+        # 6. Status Bar / Progress
+        status_frame = ttk.Frame(self, padding=(5, 2))
+        status_frame.pack(fill=X, side=BOTTOM)
         
-        # --- SECCIÓN DE LOGS ---
-        log_frame = ttk.LabelFrame(main_frame, text="Registro de Actividad", padding="5")
-        log_frame.pack(fill=tk.X, pady=5)
+        self.lbl_status = ttk.Label(status_frame, text="Sistema listo.", font=("Consolas", 9))
+        self.lbl_status.pack(side=LEFT)
         
-        self.log_area = scrolledtext.ScrolledText(log_frame, height=6, state='disabled', font=("Consolas", 8))
-        self.log_area.pack(fill=tk.BOTH, expand=True)
+        self.progress = ttk.Progressbar(status_frame, mode='indeterminate', length=200, bootstyle="success-striped")
+        # El progress se mostrará solo cuando sea necesario
+
+    def _on_double_click(self, event):
+        """
+        Muestra un Entry sobre la celda al hacer doble click para permitir copiar el texto.
+        """
+        # Identificar qué se clickeó
+        region = self.tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+
+        # Obtener coordenadas y datos
+        column = self.tree.identify_column(event.x) # e.g. #1
+        row_id = self.tree.identify_row(event.y)
+        
+        if not row_id:
+            return
+
+        # Obtener valor de la celda
+        col_idx = int(column.replace('#', '')) - 1
+        values = self.tree.item(row_id, 'values')
+        
+        if col_idx < 0 or col_idx >= len(values):
+            return
+            
+        cell_value = values[col_idx]
+
+        # Obtener posición exacta de la celda
+        x, y, width, height = self.tree.bbox(row_id, column)
+        
+        # Crear Entry temporal
+        entry = ttk.Entry(self.tree, width=width)
+        entry.place(x=x, y=y, width=width, height=height)
+        
+        entry.insert(0, cell_value)
+        entry.select_range(0, 'end')
+        entry.focus_set()
+        
+        # Eventos para cerrar el entry
+        def destroy_entry(e):
+            entry.destroy()
+            
+        entry.bind("<FocusOut>", destroy_entry)
+        entry.bind("<Return>", destroy_entry)
+        entry.bind("<Escape>", destroy_entry)
+
+    def _create_kpi_card(self, parent, title, initial_value, color):
+        card = ttk.Frame(parent, padding=10, bootstyle=f"{color}")
+        card.pack(side=LEFT, fill=BOTH, expand=True, padx=5)
+        
+        # Borde visual usando style frame
+        inner = ttk.Frame(card)
+        inner.pack(fill=BOTH, expand=True)
+
+        ttk.Label(inner, text=title, font=("Helvetica", 9), bootstyle="secondary").pack(anchor=W)
+        lbl_value = ttk.Label(inner, text=initial_value, font=("Helvetica", 16, "bold"), bootstyle=color)
+        lbl_value.pack(anchor=W)
+        
+        # Guardar referencia para actualizar luego. 
+        # Usamos atributo dinámico basado en titulo simplificado
+        attr_name = f"lbl_kpi_{title.replace(' ', '_').lower()}"
+        setattr(self, attr_name, lbl_value)
 
     # --- MÉTODOS DE INTERACCIÓN ---
 
     def actualizar_combo_periodos(self, lista_periodos):
-        """
-        Recibe una lista de diccionarios [{'periodo': '202501', 'descripcion': '202501 - Presentado'}, ...]
-        y llena el Combobox.
-        """
         if not lista_periodos:
-            self.combo_periodo['values'] = ["Sin periodos disponibles"]
+            self.combo_periodo['values'] = ["Sin periodos"]
             self.combo_periodo.current(0)
             return
 
-        # Extraemos solo las descripciones para mostrar
-        valores_visuales = [item['descripcion'] for item in lista_periodos]
-        self.combo_periodo['values'] = valores_visuales
-        
-        # Seleccionar el primero por defecto (generalmente el más reciente)
-        if valores_visuales:
+        valores = [item['descripcion'] for item in lista_periodos]
+        self.combo_periodo['values'] = valores
+        if valores:
             self.combo_periodo.current(0)
 
     def get_periodo(self):
-        """
-        Obtiene el periodo limpio (ej: '202501') del texto seleccionado (ej: '202501 - Presentado')
-        """
-        texto_seleccionado = self.periodo_var.get()
-        if not texto_seleccionado or "Cargando" in texto_seleccionado:
+        texto = self.periodo_var.get()
+        if not texto or "Cargando" in texto:
             return ""
-        # Extraemos solo los primeros 6 caracteres (el periodo)
-        return texto_seleccionado.split(" - ")[0].strip()
+        return texto.split(" - ")[0].strip()
 
     def _on_descargar_click(self):
         if self.controller:
@@ -144,115 +234,106 @@ class DashboardView(tk.Tk):
     def _on_exportar_click(self):
         if self.controller:
             self.controller.exportar_excel()
+            
+    def _on_search_change(self, *args):
+        query = self.search_var.get().lower()
+        self.filter_table(query)
 
     def log(self, message):
-        self.log_area.config(state='normal')
-        self.log_area.insert(tk.END, f"> {message}\n")
-        self.log_area.see(tk.END)
-        self.log_area.config(state='disabled')
+        # Actualiza la barra de estado inferior en lugar de un log text area
+        self.lbl_status.config(text=f"> {message}")
+        print(message) # Mantener en consola por si acaso
 
-    def mostrar_datos_tabla(self, df):
-        """
-        Muestra los datos del DataFrame en el TreeView.
-        """
-        try:
-            # Guardar referencia al DataFrame COMPLETO (para exportar)
-            self.df_actual = df
-            
-            # Limpiar tabla
-            self.tree.delete(*self.tree.get_children())
-            
-            if df is None or df.empty:
-                self.log("No hay datos para mostrar")
-                return
-            
-            # CONFIGURAR COLUMNAS A MOSTRAR EN LA VISTA
-            # Define aquí las columnas que quieres ver en la tabla
-            # IMPORTANTE: Usar los nombres exactos que vienen del excel_processor
-            
-            # Configuración de columnas: {columna: (ancho, alineación)}
-            self.COLUMN_CONFIG = {
-                'FechaEmision': (100, 'center'),
-                'FechaVencimiento': (100, 'center'),
-                'CondicionPago': (80, 'center'),
-                'DiasCredito': (70, 'center'),
-                'RazonSocialProveedor': (250, 'w'),
-                'GlosaResumen': (250, 'w'),
-                'Serie': (80, 'center'),
-                'Numero': (80, 'center'),
-                'BaseImponible': (100, 'e'),
-                'IGV': (100, 'e'),
-                'ImporteTotal': (100, 'e')
-            }
-            
-            columnas_visibles = list(self.COLUMN_CONFIG.keys())
-            
-            # Filtrar solo las columnas que existen en el DataFrame
-            columnas = [col for col in columnas_visibles if col in df.columns]
-            
-            # Si no hay columnas configuradas, mostrar las primeras 10
-            if not columnas:
-                columnas = list(df.columns)[:10]
-            
-            # Crear DataFrame filtrado solo para visualización
-            df_vista = df[columnas].copy()
-            self.tree['columns'] = columnas
-            self.tree['show'] = 'headings'
-            
-            # Definir encabezados y columnas
-            for col in columnas:
-                self.tree.heading(col, text=col)
-                
-                # Obtener configuración o usar valores por defecto
-                width, anchor = self.COLUMN_CONFIG.get(col, (100, 'w'))
-                self.tree.column(col, width=width, anchor=anchor)
-            
-            # Insertar datos (limitar a 1000 registros para rendimiento)
-            max_rows = min(1000, len(df_vista))
-            for idx, row in df_vista.head(max_rows).iterrows():
-                # Formatear valores para visualización
-                valores = []
-                for col in columnas:
-                    val = row[col]
-                    if pd.isna(val):
-                        valores.append('')
-                    elif isinstance(val, pd.Timestamp):
-                        valores.append(val.strftime('%Y-%m-%d') if pd.notna(val) else '')
-                    elif isinstance(val, (int, float)):
-                        valores.append(f"{val:.2f}" if isinstance(val, float) else str(val))
-                    else:
-                        valores.append(str(val))
-                
-                self.tree.insert('', 'end', values=valores)
-            
-            # Habilitar botón de exportación
-            self.btn_exportar.config(state="normal")
-            
-            if len(df) > max_rows:
-                self.log(f"Mostrando {max_rows} de {len(df)} registros en la tabla")
-            else:
-                self.log(f"Mostrando {len(df)} registros")
-                
-        except Exception as e:
-            self.log(f"Error mostrando datos: {str(e)}")
-    
     def set_loading(self, is_loading):
         if is_loading:
             self.btn_descargar.config(state="disabled", text="Procesando...")
             self.btn_exportar.config(state="disabled")
-            self.config(cursor="watch")
+            self.progress.pack(side=RIGHT, padx=10)
+            self.progress.start(10)
         else:
-            self.btn_descargar.config(state="normal", text=" Descargar y Visualizar")
-            self.config(cursor="")
+            self.btn_descargar.config(state="normal", text="Descargar y Procesar")
+            if self.df_actual is not None:
+                self.btn_exportar.config(state="normal")
+            self.progress.stop()
+            self.progress.pack_forget()
+
+    def mostrar_datos_tabla(self, df):
+        self.df_actual = df
+        self._llenar_tabla(df)
+        self.actualizar_kpis(df)
+        self.btn_exportar.config(state="normal")
+
+    def _llenar_tabla(self, df):
+        # Limpiar
+        self.tree.delete(*self.tree.get_children())
+        
+        if df is None or df.empty:
+            return
+            
+        # Filtrar columnas
+        cols = list(self.COLUMN_CONFIG.keys())
+        cols_presentes = [c for c in cols if c in df.columns]
+        
+        # Insertar filas (limitado a 500 para UI fluida con tkinter puro)
+        # Si usáramos Tableview de ttkbootstrap podríamos paginar, pero por ahora simple
+        max_rows = 1000
+        for idx, row in df.head(max_rows).iterrows():
+            valores = []
+            for col in cols_presentes:
+                val = row[col]
+                if pd.isna(val):
+                    valores.append("")
+                elif isinstance(val, pd.Timestamp):
+                    valores.append(val.strftime('%d/%m/%Y'))
+                elif isinstance(val, (int, float)) and col in ['BaseImponible', 'IGV', 'ImporteTotal']:
+                    valores.append(f"{val:,.2f}")
+                else:
+                    valores.append(str(val))
+            
+            self.tree.insert('', 'end', values=valores)
+            
+        self.lbl_status.config(text=f"Mostrando {len(df)} registros.")
+
+    def filter_table(self, query):
+        if self.df_actual is None or self.df_actual.empty:
+            return
+            
+        if not query:
+            self._llenar_tabla(self.df_actual)
+            return
+            
+        # Filtrado simple por texto en todas las columnas string
+        mask = self.df_actual.astype(str).apply(lambda x: x.str.lower().str.contains(query, na=False)).any(axis=1)
+        df_filtered = self.df_actual[mask]
+        self._llenar_tabla(df_filtered)
+
+    def actualizar_kpis(self, df):
+        if df is None or df.empty:
+            return
+            
+        total_docs = len(df)
+        total_base = df['BaseImponible'].sum() if 'BaseImponible' in df.columns else 0
+        total_igv = df['IGV'].sum() if 'IGV' in df.columns else 0
+        total_importe = df['ImporteTotal'].sum() if 'ImporteTotal' in df.columns else 0
+        
+        # Actualizar labels (usando las referencias dinámicas guardadas con setattr)
+        self.lbl_kpi_total_comprobantes.config(text=f"{total_docs}")
+        self.lbl_kpi_base_imponible.config(text=f"S/ {total_base:,.2f}")
+        self.lbl_kpi_total_igv.config(text=f"S/ {total_igv:,.2f}")
+        self.lbl_kpi_importe_total.config(text=f"S/ {total_importe:,.2f}")
 
     def show_info(self, title, msg):
-        messagebox.showinfo(title, msg)
+        ttk.dialogs.Messagebox.show_info(msg, title)
 
     def show_error(self, title, msg):
-        messagebox.showerror(title, msg)
+        ttk.dialogs.Messagebox.show_error(msg, title)
     
     def limpiar_tabla(self):
-        """Limpia la tabla de datos"""
         self.tree.delete(*self.tree.get_children())
         self.btn_exportar.config(state="disabled")
         self.df_actual = None
+        # Reset KPIs
+        self.lbl_kpi_total_comprobantes.config(text="0")
+        self.lbl_kpi_base_imponible.config(text="S/ 0.00")
+        self.lbl_kpi_total_igv.config(text="S/ 0.00")
+        self.lbl_kpi_importe_total.config(text="S/ 0.00")
