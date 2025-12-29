@@ -69,60 +69,19 @@ class SunatApiService:
                 callback_status(f"Intento {intentos+1}/{max_intentos} - Consultando SUNAT...")
                 response = requests.get(url, headers=self._get_headers(), params=params)
                 
-                callback_status(f"Response status: {response.status_code}")
-                
                 if response.status_code == 200:
                     data = response.json()
                     registros = data.get("registros", [])
-                    
-                    callback_status(f"Se encontraron {len(registros)} registros en la respuesta")
                     
                     # Buscamos nuestro ticket en la lista
                     ticket_data = next((item for item in registros if str(item.get("numTicket")) == str(ticket)), None)
                     
                     if ticket_data:
-                        # Obtenemos el estado y lo normalizamos a mayúsculas para comparar
                         estado = str(ticket_data.get("desEstadoProceso", "")).upper()
                         callback_status(f"✓ Ticket encontrado - Estado: {estado}")
                         
                         if estado in ["TERMINADO", "PROCESADO", "COMPLETADO"]:
-                            callback_status("Estado TERMINADO - Extrayendo información del archivo...")
-                            
-                            # Intento 1: Directo en la raíz del ticket
-                            archivos = ticket_data.get("archivoReporte")
-                            
-                            # Intento 2: Dentro de detalleTicket (común en Compras)
-                            if not archivos:
-                                detalle = ticket_data.get("detalleTicket")
-                                if detalle and isinstance(detalle, list) and len(detalle) > 0:
-                                    archivos = detalle[0].get("archivoReporte")
-                            
-
-                            if archivos and len(archivos) > 0:
-                                nom_archivo = archivos[0].get("nomArchivoReporte")
-                                # IMPORTANTE: El campo tiene un typo en la API de SUNAT: "Achivo" en lugar de "Archivo"
-                                cod_tipo = archivos[0].get("codTipoAchivoReporte") or archivos[0].get("codTipoArchivoReporte")
-                                
-                                # CRÍTICO: Extraer codProceso del registro (necesario para descarga)
-                                cod_proceso = ticket_data.get("codProceso")
-                                
-                                callback_status(f"Archivo encontrado: {nom_archivo}")
-                                callback_status(f"Código tipo: {cod_tipo}, Proceso: {cod_proceso}")
-                                
-                                # Esperar 10 segundos para que el archivo esté disponible
-                                #callback_status("⏳ Esperando 10 segundos para que el archivo esté disponible...")
-                                #time.sleep(10)
-                                
-                                return {
-                                    "nomArchivo": nom_archivo,
-                                    "codTipoArchivo": cod_tipo or '01',
-                                    "codProceso": cod_proceso,
-                                    "periodo": periodo,
-                                    "ticket": ticket
-                                }
-                            else:
-                                callback_status("⚠ Ticket terminado pero sin archivos")
-                                raise Exception("El proceso terminó pero SUNAT no generó archivos (posiblemente sin movimientos).")
+                            return self._extract_file_info(ticket_data, periodo, ticket, callback_status)
                         
                         elif "ERROR" in estado:
                             error_msg = ticket_data.get("desError", "Error desconocido en SUNAT")
@@ -142,12 +101,46 @@ class SunatApiService:
                 if "rechazó" in str(e) or "terminó pero" in str(e):
                     raise e
                 callback_status(f"⚠ Excepción en consulta: {str(e)[:200]}")
-                raise e
+                # No re-lanzamos excepciones de conexión para seguir intentando
                 
             time.sleep(5) 
             intentos += 1
         
         raise Exception(f"Límite de intentos alcanzado ({max_intentos}). El servidor de SUNAT está demorando más de lo normal.")
+
+    def _extract_file_info(self, ticket_data, periodo, ticket, callback_status):
+        """Extrae la información del archivo desde los datos del ticket."""
+        callback_status("Estado TERMINADO - Extrayendo información del archivo...")
+        
+        # Intento 1: Directo en la raíz del ticket
+        archivos = ticket_data.get("archivoReporte")
+        
+        # Intento 2: Dentro de detalleTicket (común en Compras)
+        if not archivos:
+            detalle = ticket_data.get("detalleTicket")
+            if detalle and isinstance(detalle, list) and len(detalle) > 0:
+                archivos = detalle[0].get("archivoReporte")
+
+        if archivos and len(archivos) > 0:
+            nom_archivo = archivos[0].get("nomArchivoReporte")
+            # IMPORTANTE: El campo tiene un typo en la API de SUNAT: "Achivo" en lugar de "Archivo"
+            cod_tipo = archivos[0].get("codTipoAchivoReporte") or archivos[0].get("codTipoArchivoReporte")
+            
+            # CRÍTICO: Extraer codProceso (necesario para descarga)
+            cod_proceso = ticket_data.get("codProceso")
+            
+            callback_status(f"Archivo encontrado: {nom_archivo}")
+            
+            return {
+                "nomArchivo": nom_archivo,
+                "codTipoArchivo": cod_tipo or '01',
+                "codProceso": cod_proceso,
+                "periodo": periodo,
+                "ticket": ticket
+            }
+        else:
+            callback_status("⚠ Ticket terminado pero sin archivos")
+            raise Exception("El proceso terminó pero SUNAT no generó archivos (posiblemente sin movimientos).")
 
     def descargar_archivo(self, nombre_archivo, cod_tipo_archivo, callback_status=None, cod_proceso=None, periodo=None, ticket=None):
         """
@@ -183,7 +176,11 @@ class SunatApiService:
             response = requests.get(url, headers=headers, params=params)
             
             if response.status_code == 200:
-                ruta_local = os.path.join(os.getcwd(), nombre_archivo)
+                # Asegurar que existe la carpeta downloads
+                download_dir = os.path.join(os.getcwd(), 'downloads')
+                os.makedirs(download_dir, exist_ok=True)
+                
+                ruta_local = os.path.join(download_dir, nombre_archivo)
                 with open(ruta_local, "wb") as f:
                     f.write(response.content)
                 if callback_status:

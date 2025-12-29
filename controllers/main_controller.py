@@ -27,6 +27,12 @@ class MainController:
         except FileNotFoundError:
             return {}
 
+    def _run_async(self, target, *args):
+        """Ejecuta una función en un hilo separado para no congelar la UI."""
+        thread = threading.Thread(target=target, args=args)
+        thread.daemon = True
+        thread.start()
+
     def iniciar_proceso(self):
         periodo = self.view.get_periodo()
         
@@ -39,12 +45,8 @@ class MainController:
         self.view.set_loading(True)
         self.view.limpiar_tabla()
         
-        # Ejecutar en hilo separado para no congelar la ventana
-        thread = threading.Thread(target=self._worker_iniciar_proceso, args=(periodo,))
-        thread.daemon = True
-        thread.start()
-        
-        
+        # Ejecutar en hilo separado
+        self._run_async(self._worker_iniciar_proceso, periodo)
 
     def listar_periodos(self):
         """
@@ -54,9 +56,7 @@ class MainController:
         self.view.set_loading(True)
         self.view.log("Consultando periodos disponibles en SUNAT...")
         
-        thread = threading.Thread(target=self._worker_listar_periodos)
-        thread.daemon = True
-        thread.start()
+        self._run_async(self._worker_listar_periodos)
 
     def _worker_listar_periodos(self):
         try:
@@ -91,7 +91,6 @@ class MainController:
             # Liberar UI
             self.view.after(0, lambda: self.view.set_loading(False))
 
-    # --- CORRECCIÓN 2: Bloque Finally en descarga ---
     def _worker_iniciar_proceso(self, periodo):
         try:
             def update_log(msg):
@@ -109,10 +108,6 @@ class MainController:
                 cod_tipo = info_archivo.get('codTipoArchivo', '01')
                 cod_proceso = info_archivo.get('codProceso')
                 
-                # Pausa adicional: SUNAT a veces dice 'TERMINADO' pero el archivo no está listo
-                #update_log("⏳ Ticket terminado. Esperando sincronización del servidor (10s)...")
-                #time.sleep(10)
-
                 # 3. Descargar el archivo con los 6 parámetros críticos
                 update_log(f"Descargando archivo con código de proceso: {cod_proceso}...")
                 ruta_zip = self.api_service.descargar_archivo(
@@ -159,9 +154,7 @@ class MainController:
         self.view.set_loading(True)
         self.view.log("Iniciando exportación a Excel...")
         
-        thread = threading.Thread(target=self._worker_exportar_excel)
-        thread.daemon = True
-        thread.start()
+        self._run_async(self._worker_exportar_excel)
     
     def _worker_exportar_excel(self):
         try:

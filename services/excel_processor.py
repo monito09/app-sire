@@ -2,9 +2,26 @@ import pandas as pd
 import numpy as np
 import zipfile
 import os
-import io
 
 class ExcelProcessor:
+    COLUMN_MAPPING = {
+        1: 'RazonSocialProveedor',
+        4: 'FechaEmision',
+        5: 'FechaVencimiento',
+        6: 'TipoDoc',
+        7: 'Serie',
+        8: 'Numero',
+        14: 'BaseImponible',
+        15: 'IGV',
+        23: 'ImporteTotal'
+    }
+
+    COLUMNS_FINAL = [
+        'FechaEmision', 'FechaVencimiento', 'CondicionPago', 'DiasCredito',
+        'RazonSocialProveedor', 'Serie', 'Numero', 'GlosaResumen',
+        'BaseImponible', 'IGV', 'ImporteTotal'
+    ]
+
     def __init__(self):
         self.df_actual = None
         self.ruta_zip_actual = None
@@ -12,7 +29,6 @@ class ExcelProcessor:
     def procesar_zip(self, ruta_zip, callback_status):
         """
         Procesa el ZIP descargado de SUNAT y retorna un DataFrame.
-        NO genera Excel, solo procesa los datos.
         """
         callback_status("Procesando archivo ZIP...")
         
@@ -29,83 +45,10 @@ class ExcelProcessor:
                 with z.open(nombre_archivo_interno) as f:
                     df = pd.read_csv(f, sep="|", encoding="latin-1", header=None, on_bad_lines='skip')
                     
-                    # --- CORRECCIÓN DE MAPEO DE COLUMNAS (Estructura SIRE) ---
-                    # 1: Razón Social
-                    # 2: Periodo
-                    # 3: CAR
-                    # 4: Fecha Emisión
-                    # 5: Fecha Vencimiento
-                    # 6: Tipo CP
-                    # 7: Serie CP
-                    # 8: Número CP
-                    # 14: Base Imponible
-                    # 15: IGV
-                    # 23: Importe Total
+                    df.rename(columns=self.COLUMN_MAPPING, inplace=True)
+                    df = self._clean_data(df)
                     
-                    mapping = {
-                        1: 'RazonSocialProveedor',
-                        4: 'FechaEmision',
-                        5: 'FechaVencimiento',
-                        6: 'TipoDoc',
-                        7: 'Serie',
-                        8: 'Numero',
-                        14: 'BaseImponible',
-                        15: 'IGV',
-                        23: 'ImporteTotal'
-                    }
-                    
-                    df.rename(columns=mapping, inplace=True)
-
-                    # --- LIMPIEZA Y CONVERSIÓN ---
-                    
-                    # 1. Fechas y Filtrado de Cabeceras
-                    if 'FechaEmision' in df.columns:
-                        df['FechaEmision'] = pd.to_datetime(df['FechaEmision'], format='%d/%m/%Y', dayfirst=True, errors='coerce')
-                        # Eliminar filas que no tengan fecha válida (elimina cabeceras y metadata)
-                        df = df.dropna(subset=['FechaEmision'])
-
-                    if 'FechaVencimiento' in df.columns:
-                        df['FechaVencimiento'] = pd.to_datetime(df['FechaVencimiento'], format='%d/%m/%Y', dayfirst=True, errors='coerce')
-
-                    # 2. Numéricos
-                    cols_num = ['BaseImponible', 'IGV', 'ImporteTotal']
-                    for col in cols_num:
-                        if col in df.columns:
-                            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
-                    
-                    # 3. Recalcular Total (para consistencia)
-                    if 'BaseImponible' in df.columns and 'IGV' in df.columns:
-                        df['ImporteTotal'] = df['BaseImponible'] + df['IGV']
-
-                    # 4. Campos Calculados
-                    if 'FechaVencimiento' in df.columns and 'FechaEmision' in df.columns:
-                        df['CondicionPago'] = np.where(
-                            (df['FechaVencimiento'].notnull()) & (df['FechaVencimiento'] > df['FechaEmision']),
-                            'CREDITO',
-                            'CONTADO'
-                        )
-                        
-                        df['DiasCredito'] = (df['FechaVencimiento'] - df['FechaEmision']).dt.days
-                        df['DiasCredito'] = df['DiasCredito'].fillna(0).astype(int)
-                    else:
-                        df['CondicionPago'] = 'CONTADO'
-                        df['DiasCredito'] = 0
-
-                    if 'RazonSocialProveedor' in df.columns and 'Serie' in df.columns and 'Numero' in df.columns:
-                        df['GlosaResumen'] = (
-                            "COMPRA A " + df['RazonSocialProveedor'].astype(str) + 
-                            " DOC: " + df['Serie'].astype(str) + "-" + df['Numero'].astype(str)
-                        )
-                    else:
-                        df['GlosaResumen'] = "SIN DATOS SUFICIENTES"
-
-                    columnas_finales = [
-                        'FechaEmision', 'FechaVencimiento', 'CondicionPago', 'DiasCredito',
-                        'RazonSocialProveedor', 'Serie', 'Numero', 'GlosaResumen',
-                        'BaseImponible', 'IGV', 'ImporteTotal'
-                    ]
-                    
-                    cols_a_exportar = [c for c in columnas_finales if c in df.columns]
+                    cols_a_exportar = [c for c in self.COLUMNS_FINAL if c in df.columns]
                     df_final = df[cols_a_exportar]
                     
                     # Guardar referencia para exportación posterior
@@ -117,6 +60,50 @@ class ExcelProcessor:
 
         except Exception as e:
             raise Exception(f"Error procesando ZIP: {str(e)}")
+
+    def _clean_data(self, df):
+        """Limpia y transforma los datos del DataFrame."""
+        # 1. Fechas y Filtrado de Cabeceras
+        if 'FechaEmision' in df.columns:
+            df['FechaEmision'] = pd.to_datetime(df['FechaEmision'], format='%d/%m/%Y', dayfirst=True, errors='coerce')
+            df = df.dropna(subset=['FechaEmision']).copy() # FIX: .copy() para evitar SettingWithCopyWarning
+
+        if 'FechaVencimiento' in df.columns:
+            df['FechaVencimiento'] = pd.to_datetime(df['FechaVencimiento'], format='%d/%m/%Y', dayfirst=True, errors='coerce')
+
+        # 2. Numéricos
+        cols_num = ['BaseImponible', 'IGV', 'ImporteTotal']
+        for col in cols_num:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+        
+        # 3. Recalcular Total
+        if 'BaseImponible' in df.columns and 'IGV' in df.columns:
+            df['ImporteTotal'] = df['BaseImponible'] + df['IGV']
+
+        # 4. Campos Calculados
+        if 'FechaVencimiento' in df.columns and 'FechaEmision' in df.columns:
+            df['CondicionPago'] = np.where(
+                (df['FechaVencimiento'].notnull()) & (df['FechaVencimiento'] > df['FechaEmision']),
+                'CREDITO',
+                'CONTADO'
+            )
+            
+            df['DiasCredito'] = (df['FechaVencimiento'] - df['FechaEmision']).dt.days
+            df['DiasCredito'] = df['DiasCredito'].fillna(0).astype(int)
+        else:
+            df['CondicionPago'] = 'CONTADO'
+            df['DiasCredito'] = 0
+
+        if all(col in df.columns for col in ['RazonSocialProveedor', 'Serie', 'Numero']):
+            df['GlosaResumen'] = (
+                "COMPRA A " + df['RazonSocialProveedor'].astype(str) + 
+                " DOC: " + df['Serie'].astype(str) + "-" + df['Numero'].astype(str)
+            )
+        else:
+            df['GlosaResumen'] = "SIN DATOS SUFICIENTES"
+            
+        return df
     
     def exportar_a_excel(self, df=None, ruta_salida=None, callback_status=None):
         """
@@ -130,11 +117,17 @@ class ExcelProcessor:
                 raise Exception("No hay datos para exportar")
             
             if ruta_salida is None:
-                if self.ruta_zip_actual:
-                    ruta_salida = self.ruta_zip_actual.replace(".zip", "_Resumen.xlsx")
-                else:
-                    ruta_salida = "Resumen_SUNAT.xlsx"
+                # Generar nombre legible: Reporte_SIRE_YYYYMMDD_HHMMSS.xlsx
+                import time
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                nombre_base = f"Reporte_SIRE_{timestamp}.xlsx"
+                
+                # Guardar en la carpeta downloads
+                ruta_salida = os.path.join(os.getcwd(), 'downloads', nombre_base)
             
+            # Asegurar directorio
+            os.makedirs(os.path.dirname(ruta_salida), exist_ok=True)
+
             if callback_status:
                 callback_status(f"Exportando {len(df_a_exportar)} registros a Excel...")
             

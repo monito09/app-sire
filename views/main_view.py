@@ -169,18 +169,23 @@ class DashboardView(tk.Tk):
             # CONFIGURAR COLUMNAS A MOSTRAR EN LA VISTA
             # Define aquí las columnas que quieres ver en la tabla
             # IMPORTANTE: Usar los nombres exactos que vienen del excel_processor
-            columnas_visibles = [
-                'FechaEmision',
-                'FechaVencimiento',
-                'CondicionPago',
-                'DiasCredito',
-                'RazonSocialProveedor',
-                'Serie',
-                'Numero',
-                'BaseImponible',
-                'IGV',
-                'ImporteTotal'
-            ]
+            
+            # Configuración de columnas: {columna: (ancho, alineación)}
+            self.COLUMN_CONFIG = {
+                'FechaEmision': (100, 'center'),
+                'FechaVencimiento': (100, 'center'),
+                'CondicionPago': (80, 'center'),
+                'DiasCredito': (70, 'center'),
+                'RazonSocialProveedor': (250, 'w'),
+                'GlosaResumen': (250, 'w'),
+                'Serie': (80, 'center'),
+                'Numero': (80, 'center'),
+                'BaseImponible': (100, 'e'),
+                'IGV': (100, 'e'),
+                'ImporteTotal': (100, 'e')
+            }
+            
+            columnas_visibles = list(self.COLUMN_CONFIG.keys())
             
             # Filtrar solo las columnas que existen en el DataFrame
             columnas = [col for col in columnas_visibles if col in df.columns]
@@ -194,22 +199,13 @@ class DashboardView(tk.Tk):
             self.tree['columns'] = columnas
             self.tree['show'] = 'headings'
             
-            # Definir encabezados
+            # Definir encabezados y columnas
             for col in columnas:
                 self.tree.heading(col, text=col)
-                # Ajustar ancho según el nombre de columna
-                if col in ['FechaEmision', 'FechaVencimiento']:
-                    self.tree.column(col, width=100, anchor='center')
-                elif col in ['CondicionPago']:
-                    self.tree.column(col, width=80, anchor='center')
-                elif col in ['DiasCredito']:
-                    self.tree.column(col, width=70, anchor='center')
-                elif col in ['RazonSocialProveedor', 'GlosaResumen']:
-                    self.tree.column(col, width=250, anchor='w')
-                elif col in ['Serie', 'Numero']:
-                    self.tree.column(col, width=80, anchor='center')
-                else:
-                    self.tree.column(col, width=100, anchor='e')
+                
+                # Obtener configuración o usar valores por defecto
+                width, anchor = self.COLUMN_CONFIG.get(col, (100, 'w'))
+                self.tree.column(col, width=width, anchor=anchor)
             
             # Insertar datos (limitar a 1000 registros para rendimiento)
             max_rows = min(1000, len(df_vista))
