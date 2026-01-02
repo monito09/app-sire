@@ -21,10 +21,11 @@ class SunatPdfDownloader:
 
     def _extract_description_from_zip(self, zip_path: str, output_dir: str, base_name: str) -> Optional[str]:
         """
-        Extrae el XML del ZIP, busca las descripciones de los items y las guarda en un TXT.
+        Extrae el XML del ZIP, busca datos (Descripción, Cantidad, Unidad) y los guarda en JSON.
         """
         try:
-            descripciones = []
+            items_data = [] # Lista de dicts: {descripcion, cantidad, unidad}
+            
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 # Buscar archivos XML dentro del ZIP
                 xml_files = [f for f in zip_ref.namelist() if f.endswith('.xml')]
@@ -47,17 +48,36 @@ class SunatPdfDownloader:
                             
                         for line in lines:
                             item = line.find('cac:Item', namespaces)
+                            
+                            descripcion = ""
                             if item is not None:
-                                desc = item.find('cbc:Description', namespaces)
-                                if desc is not None and desc.text:
-                                    descripciones.append(desc.text.strip())
+                                desc_node = item.find('cbc:Description', namespaces)
+                                if desc_node is not None and desc_node.text:
+                                    descripcion = desc_node.text.strip()
+                            
+                            cantidad = ""
+                            unidad = ""
+                            qty_node = line.find('cbc:InvoicedQuantity', namespaces)
+                            if qty_node is None:
+                                qty_node = line.find('cbc:CreditedQuantity', namespaces) # Para notas de crédito
+                                
+                            if qty_node is not None:
+                                cantidad = qty_node.text.strip() if qty_node.text else ""
+                                unidad = qty_node.get('unitCode', "")
+                                
+                            items_data.append({
+                                "descripcion": descripcion,
+                                "cantidad": cantidad,
+                                "unidad": unidad
+                            })
             
-            # Guardar descripciones en TXT
-            if descripciones:
-                txt_path = get_file_path(output_dir, f"{base_name}.txt")
-                with open(txt_path, 'w', encoding='utf-8') as f:
-                    f.write(" | ".join(descripciones))
-                return txt_path
+            # Guardar en JSON (reemplaza al TXT antiguo)
+            if items_data:
+                json_path = get_file_path(output_dir, f"{base_name}.json")
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    import json
+                    json.dump(items_data, f, ensure_ascii=False, indent=2)
+                return json_path
             return None
             
         except Exception as e:

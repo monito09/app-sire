@@ -1,8 +1,11 @@
 import ttkbootstrap as ttk
+from utils.sunat_formatting import format_quantity, get_unit_description
 from ttkbootstrap.constants import *
 from ttkbootstrap.tableview import Tableview
 from tkinter import filedialog
+from datetime import datetime
 import pandas as pd
+import json
 
 class DashboardView(ttk.Window):
     def __init__(self, controller=None):
@@ -29,6 +32,8 @@ class DashboardView(ttk.Window):
             'IGV': (110, 'e'),
             'ImporteTotal': (120, 'e'),
             'VerDescripcion': (200, 'w'),
+            'Cantidad': (80, 'center'),
+            'Unidad': (80, 'center'),
             'VerPDF': (120, 'center') # Antes PDFAccion
         }
         
@@ -63,6 +68,7 @@ class DashboardView(ttk.Window):
             width=35,
             bootstyle="primary"
         )
+        self.combo_periodo.pack(side=LEFT, padx=(0, 20))
         self.combo_periodo.pack(side=LEFT, padx=(0, 20))
         self.combo_periodo.set("Cargando periodos...")
         
@@ -247,6 +253,7 @@ class DashboardView(ttk.Window):
         query = self.search_var.get().lower()
         self.filter_table(query)
 
+
     def log(self, message):
         # Actualiza la barra de estado inferior en lugar de un log text area
         self.lbl_status.config(text=f"> {message}")
@@ -289,12 +296,29 @@ class DashboardView(ttk.Window):
         pdf_dir = os.path.join(os.getcwd(), 'downloads', 'pdf')
         xml_desc_dir = os.path.join(os.getcwd(), 'downloads', 'xml')
 
+        # Calcular antigüedad del periodo para advertencias
+        periodo_antiguo = False
+        try:
+            periodo_texto = self.get_periodo()
+            if periodo_texto and len(periodo_texto) == 6:
+                p_date = datetime.strptime(periodo_texto, "%Y%m")
+                now = datetime.now()
+                diff_months = (now.year - p_date.year) * 12 + (now.month - p_date.month)
+                if diff_months > 24:
+                    periodo_antiguo = True
+        except:
+            pass
+
         for idx, row in df.head(max_rows).iterrows():
             valores = []
             
             # Determinar estado del PDF dinámicamente
+            # Variables para datos extraídos (por defecto vacíos/indicadores)
             estado_pdf = "🚫 NO DISP."
-            desc_text = "📥 OBTENER"
+            # Si es antiguo, por defecto no dejamos "OBTENER"
+            desc_text = "⚠️ NO DISP." if periodo_antiguo else "📥 OBTENER"
+            cant_text = ""
+            und_text = ""
 
             if 'Serie' in row and 'Numero' in row:
                 s = str(row['Serie'])
@@ -305,9 +329,23 @@ class DashboardView(ttk.Window):
                 if os.path.exists(path):
                     estado_pdf = "📄 PDF"
                 
-                # Descripción
+                # Datos Extraídos (JSON > TXT)
+                json_path = os.path.join(xml_desc_dir, f"{s}-{n}.json")
                 txt_path = os.path.join(xml_desc_dir, f"{s}-{n}.txt")
-                if os.path.exists(txt_path):
+                
+                if os.path.exists(json_path):
+                    try:
+                        with open(json_path, 'r', encoding='utf-8') as f:
+                            items = json.load(f)
+                            if items:
+                                first_item = items[0]
+                                desc_text = first_item.get('descripcion', '')
+                                cant_text = format_quantity(first_item.get('cantidad', ''))
+                                und_text = get_unit_description(first_item.get('unidad', ''))
+                    except:
+                        pass
+                elif os.path.exists(txt_path):
+                    # Fallback para antiguos TXT
                     try:
                         with open(txt_path, 'r', encoding='utf-8') as f:
                             content = f.read().strip()
@@ -324,6 +362,14 @@ class DashboardView(ttk.Window):
                 
                 if col == 'VerDescripcion':
                     valores.append(desc_text)
+                    continue
+
+                if col == 'Cantidad':
+                    valores.append(cant_text)
+                    continue
+
+                if col == 'Unidad':
+                    valores.append(und_text)
                     continue
 
                 if col not in row:
@@ -343,6 +389,16 @@ class DashboardView(ttk.Window):
             self.tree.insert('', 'end', values=valores)
             
         self.lbl_status.config(text=f"Mostrando {len(df)} registros.")
+
+        # Mostrar advertencia si es periodo antiguo
+        if periodo_antiguo:
+            # Usamos after para asegurar que se muestre después de renderizar la tabla
+            self.after(500, lambda: self.show_info(
+                "Aviso de Antigüedad", 
+                f"El periodo {periodo_texto} tiene más de 24 meses de antigüedad.\n\n"
+                "📌 Se muestra la lista general de comprobantes e importes (Base).\n"
+                "⚠️ La descarga de PDF y detalle (Ítems) NO está disponible para este periodo."
+            ))
 
     def filter_table(self, query):
         if self.df_actual is None or self.df_actual.empty:
@@ -374,6 +430,9 @@ class DashboardView(ttk.Window):
 
     def show_info(self, title, msg):
         ttk.dialogs.Messagebox.show_info(msg, title)
+
+    def show_warning(self, title, msg):
+        ttk.dialogs.Messagebox.show_warning(msg, title)
 
     def show_error(self, title, msg):
         ttk.dialogs.Messagebox.show_error(msg, title)

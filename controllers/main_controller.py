@@ -199,8 +199,15 @@ class MainController:
                 self.view.df_actual = df
                 self.view.after(0, lambda: self.view.mostrar_datos_tabla(df))
                 
-                update_log(f"✅ Proceso completado. {len(df)} registros cargados.")
-                self.view.after(0, lambda: self.view.show_info("Éxito", f"Se han cargado {len(df)} comprobantes."))
+                if df is not None and not df.empty:
+                    update_log(f"✅ Proceso completado. {len(df)} registros cargados.")
+                    self.view.after(0, lambda: self.view.show_info("Éxito", f"Se han cargado {len(df)} comprobantes."))
+                else:
+                    update_log("⚠️ No se encontraron comprobantes para este periodo.")
+                    self.view.after(0, lambda: self.view.show_warning(
+                        "Sin Datos", 
+                        "No existe información de Comprobantes de Pago para el período"
+                    ))
             
             else:
                 raise Exception("No se encontró información del archivo en el ticket.")

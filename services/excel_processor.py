@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import zipfile
 import os
+import json
+from utils.sunat_formatting import format_quantity, get_unit_description
 
 class ExcelProcessor:
     COLUMN_MAPPING = {
@@ -48,11 +50,35 @@ class ExcelProcessor:
                     df = pd.read_csv(f, sep="|", encoding="latin-1", header=None, on_bad_lines='skip')
                     
                     df.rename(columns=self.COLUMN_MAPPING, inplace=True)
-                    df = self._clean_data(df)
+
+                    # Verificar columnas críticas
+                    # Si el archivo es "vacío" o tiene formato incorrecto, el mapeo no encontrará column 12 (RUC)
+                    required_cols = ['RucProveedor', 'Serie']
+                    missing_cols = [c for c in required_cols if c not in df.columns]
                     
+                    if missing_cols:
+                        callback_status("⚠️ Archivo sin estructura válida de comprobantes.")
+                        return pd.DataFrame()
+
+                    df = self._clean_data(df)
+
+                    # Validación Estricta: Eliminar filas que no tengan RUC válido (debe ser numérico)
+                    # 1. Eliminar nulos/vacíos
+                    df = df[df['RucProveedor'].notna() & (df['RucProveedor'].astype(str).str.strip() != '')]
+                    # 2. Asegurar que sea numérico (elimina cabeceras o metadatos)
+                    # Convertimos a string, quitamos .0 por si acaso parseó como float, y verificamos dígitos
+                    df = df[df['RucProveedor'].astype(str).str.replace(r'\.0$', '', regex=True).str.isdigit()]
+
+                    if df.empty:
+                         callback_status("⚠️ El archivo procesado no contiene comprobantes válidos.")
+                         return pd.DataFrame() # Return empty DF
+
                     cols_a_exportar = [c for c in self.COLUMNS_FINAL if c in df.columns]
                     df_final = df[cols_a_exportar]
                     
+                    if df_final.empty:
+                        return pd.DataFrame()
+
                     # Guardar referencia para exportación posterior
                     self.df_actual = df_final
                     self.ruta_zip_actual = ruta_zip
@@ -126,35 +152,58 @@ class ExcelProcessor:
             if df_a_exportar is None or df_a_exportar.empty:
                 raise Exception("No hay datos para exportar")
             
-            # --- ENRIQUECIMIENTO CON DESCRIPCIONES ---
+            # --- ENRIQUECIMIENTO CON DESCRIPCIONES, CANTIDAD Y UNIDAD ---
             df_final = df_a_exportar.copy()
             xml_desc_dir = os.path.join(os.getcwd(), 'downloads', 'xml')
             
-            def get_descripcion(row):
+            # Preparar listas para nuevas columnas
+            descripciones = []
+            cantidades = []
+            unidades = []
+            
+            for idx, row in df_final.iterrows():
+                desc = ""
+                cant = ""
+                und = ""
+                
                 try:
                     if 'Serie' in row and 'Numero' in row:
                         s = str(row['Serie'])
                         n = str(row['Numero'])
+                        
+                        json_path = os.path.join(xml_desc_dir, f"{s}-{n}.json")
                         txt_path = os.path.join(xml_desc_dir, f"{s}-{n}.txt")
-                        if os.path.exists(txt_path):
+                        
+                        if os.path.exists(json_path):
+                            with open(json_path, 'r', encoding='utf-8') as f:
+                                items = json.load(f)
+                                if items:
+                                    first_item = items[0]
+                                    desc = first_item.get('descripcion', '')
+                                    cant = format_quantity(first_item.get('cantidad', ''))
+                                    und = get_unit_description(first_item.get('unidad', ''))
+                        elif os.path.exists(txt_path):
+                            # Fallback
                             with open(txt_path, 'r', encoding='utf-8') as f:
-                                return f.read().strip()
+                                desc = f.read().strip()
                 except:
                     pass
-                return ""
+                
+                descripciones.append(desc)
+                cantidades.append(cant)
+                unidades.append(und)
 
             if callback_status:
-                callback_status("Agregando descripciones descargadas...")
+                callback_status("Agregando descripciones y detalles descargados...")
             
-            df_final['Descripcion'] = df_final.apply(get_descripcion, axis=1)
+            df_final['Descripcion'] = descripciones
+            df_final['Cantidad'] = cantidades
+            df_final['Unidad de Medida'] = unidades
             
-            # Reordenar columnas para poner Descripcion después de ImporteTotal
-            cols = list(df_final.columns)
-            if 'ImporteTotal' in cols and 'Descripcion' in cols:
-                cols.remove('Descripcion')
-                idx = cols.index('ImporteTotal') + 1
-                cols.insert(idx, 'Descripcion')
-                df_final = df_final[cols]
+            # Reordenar para poner estos campos al final o cerca del Importe Total
+            # El usuario pidió "al lado de la ultima columna", por defecto se agregan al final.
+            # Solo moveremos Descripcion para que esté antes de Cantidad si ya no lo está.
+            # Como se agregan secuencialmente, estarán al final en orden: Descripcion, Cantidad, Unidad_Medida
             # -----------------------------------------
 
             if ruta_salida is None:
