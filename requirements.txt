@@ -3,3 +3,4 @@ playwright
 requests
 pandas
 openpyxl
+ttkbootstrap
