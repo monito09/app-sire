@@ -64,9 +64,9 @@ class ExcelProcessor:
 
                     # Validación Estricta: Eliminar filas que no tengan RUC válido (debe ser numérico)
                     # 1. Eliminar nulos/vacíos
-                    df = df[df['RucProveedor'].notna() & (df['RucProveedor'].astype(str).str.strip() != '')]
                     # 2. Asegurar que sea numérico (elimina cabeceras o metadatos)
-                    # Convertimos a string, quitamos .0 por si acaso parseó como float, y verificamos dígitos
+                    # Esto previene que filas con "CONTADO" pero sin RUC se consideren válidas
+                    df = df[df['RucProveedor'].notna() & (df['RucProveedor'].astype(str).str.strip() != '')]
                     df = df[df['RucProveedor'].astype(str).str.replace(r'\.0$', '', regex=True).str.isdigit()]
 
                     if df.empty:

@@ -203,6 +203,7 @@ class MainController:
                     update_log(f"✅ Proceso completado. {len(df)} registros cargados.")
                     self.view.after(0, lambda: self.view.show_info("Éxito", f"Se han cargado {len(df)} comprobantes."))
                 else:
+                    # Caso: Archivo ZIP válido pero sin registros de compras (periodo "vacío")
                     update_log("⚠️ No se encontraron comprobantes para este periodo.")
                     self.view.after(0, lambda: self.view.show_warning(
                         "Sin Datos", 

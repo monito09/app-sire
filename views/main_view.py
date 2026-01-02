@@ -297,6 +297,7 @@ class DashboardView(ttk.Window):
         xml_desc_dir = os.path.join(os.getcwd(), 'downloads', 'xml')
 
         # Calcular antigüedad del periodo para advertencias
+        # Si tiene > 24 meses, SUNAT restringe descarga de PDF/XML
         periodo_antiguo = False
         try:
             periodo_texto = self.get_periodo()
