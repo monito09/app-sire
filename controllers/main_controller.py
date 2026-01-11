@@ -3,6 +3,7 @@ import json
 import os
 import time
 from typing import Optional, List, Dict, Any, Callable
+import logging
 
 # Services
 from services.auth_service import SunatAuthService
@@ -14,6 +15,12 @@ from services.sunat_pdf_downloader import SunatPdfDownloader
 from utils.file_utils import ensure_directory_exists, get_file_path, file_exists
 from utils.logger_utils import format_log_message
 
+# Views
+# Importamos dentro de los métodos o aquí si no hay ciclo.
+# Como el controller gestiona las vistas, es mejor importarlas.
+from views.login_view import LoginView
+from views.main_view import DashboardView
+
 class MainController:
     """
     Controller principal de la aplicación.
@@ -22,14 +29,97 @@ class MainController:
 
     def __init__(self) -> None:
         self.view: Any = None
+        self.login_view: Any = None
         self.config: Dict[str, Any] = self._load_config()
         self._initialize_directories()
         
-        # Inicializar servicios
-        self.auth_service = SunatAuthService(self.config)
+        # Servicios se inicializan luego del login/config
+        self.auth_service: Optional[SunatAuthService] = None
+        self.api_service: Optional[SunatApiService] = None
+        self.excel_processor: Optional[ExcelProcessor] = None
+        self.pdf_downloader: Optional[SunatPdfDownloader] = None
+
+        # Inicializar Ventana Raíz Única
+        import ttkbootstrap as ttk
+        self.root = ttk.Window(themename="flatly")
+        self.root.withdraw() # Ocultar hasta decidir qué mostrar
+
+    def start(self) -> None:
+        """Punto de entrada: Determina si mostrar Login o Dashboard."""
+        if self._is_config_valid(self.config):
+            print("Configuración válida encontrada. Iniciando Dashboard.")
+            self._init_services(self.config)
+            self._start_dashboard()
+        else:
+            print("Configuración faltante o inválida. Iniciando Login.")
+            self._start_login()
+        
+        # Iniciar loop principal de la raíz
+        self.root.mainloop()
+
+    def _is_config_valid(self, config: Dict) -> bool:
+        required = ["client_id", "client_secret", "ruc", "usuario_sol", "clave_sol"]
+        return all(k in config and config[k] for k in required)
+
+    def _start_login(self) -> None:
+        self.root.deiconify() # Mostrar ventana
+        self.login_view = LoginView(self.root, self)
+        # LoginView ya se hace pack a sí mismo en su init o podemos hacerlo aquí
+        # En el paso anterior puse self.pack() en LoginView.__init__
+        # pero es buena práctica controlar el layout desde fuera si es posible.
+        # LoginView ya tiene un self.pack()
+
+    def handle_login_attempt(self, credentials: Dict, save_local: bool) -> None:
+        """Maneja el intento de login desde la vista."""
+        try:
+            # 1. Intentar inicializar servicio de auth y obtener token para validar
+            temp_service = SunatAuthService(credentials)
+            # Intentamos obtener token (esto validará si las credenciales API funcionan)
+            temp_service.get_token() 
+            
+            # 2. Si pasa, guardamos y procedemos
+            self.config = credentials
+            if save_local:
+                self._save_config(credentials)
+            
+            self._init_services(self.config)
+            
+            # 3. Cerrar Login (destruir frame) y abrir Dashboard
+            if self.login_view:
+                self.login_view.destroy() 
+                self.login_view = None
+            
+            self._start_dashboard()
+            
+        except Exception as e:
+            # Error de autenticación
+            if self.login_view:
+                self.login_view.show_error(f"Error de autenticación API:\n{str(e)}")
+
+    def _start_dashboard(self) -> None:
+        self.root.deiconify()
+        # DashboardView es un Frame ahora
+        self.view = DashboardView(self.root, self)
+        self.view.pack(fill='both', expand=True)
+        self.set_view(self.view)
+        
+        # Cargar periodos al iniciar
+        self.view.after(100, self.listar_periodos)
+        # mainloop ya está corriendo en start()
+
+    def _init_services(self, config: Dict) -> None:
+        self.auth_service = SunatAuthService(config)
         self.api_service = SunatApiService(self.auth_service)
         self.excel_processor = ExcelProcessor()
-        self.pdf_downloader = SunatPdfDownloader(self.config)
+        self.pdf_downloader = SunatPdfDownloader(config)
+
+    def _save_config(self, config: Dict) -> None:
+        try:
+            config_path = get_file_path(os.path.dirname(os.path.dirname(__file__)), 'config.json')
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=4)
+        except Exception as e:
+            print(f"No se pudo guardar config.json: {e}")
 
     def set_view(self, view: Any) -> None:
         """Asigna la vista principal al controlador."""
@@ -41,7 +131,7 @@ class MainController:
         try:
             with open(config_path, 'r') as f:
                 return json.load(f)
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
     def _initialize_directories(self) -> None:
@@ -82,6 +172,10 @@ class MainController:
         """
         Inicia la descarga del PDF y XML.
         """
+        if not self.pdf_downloader:
+            self.view.show_error("Error", "Servicio de descarga no inicializado.")
+            return
+
         self.view.log(format_log_message(f"Iniciando descarga para {serie}-{numero}..."))
         self.view.set_loading(True)
         self._run_async(self._worker_descargar_pdf, ruc_proveedor, serie, numero)
@@ -107,6 +201,10 @@ class MainController:
 
     def iniciar_proceso(self) -> None:
         """Inicia el proceso de descarga masiva para un periodo."""
+        if not self.api_service:
+             self.view.show_error("Error", "Servicio API no inicializado.")
+             return
+
         periodo = self.view.get_periodo()
         
         # Validación básica
@@ -126,6 +224,10 @@ class MainController:
         Inicia la carga de periodos en un hilo secundario para no congelar la UI.
         Carga TODOS los periodos (presentados y no presentados).
         """
+        if not self.api_service:
+            # Si se llama antes de init (no debería pasar con el nuevo flujo pero por seguridad)
+            return
+
         self.view.set_loading(True)
         self.view.log(format_log_message("Consultando periodos disponibles en SUNAT..."))
         
@@ -193,6 +295,9 @@ class MainController:
 
                 # 4. PROCESAR EL ZIP
                 update_log("📦 Extrayendo y procesando datos del archivo ZIP...")
+                if not self.excel_processor:
+                    self.excel_processor = ExcelProcessor() # Fallback safe
+                    
                 df = self.excel_processor.procesar_zip(ruta_zip, update_log)
                 
                 # 5. ACTUALIZAR VISTA

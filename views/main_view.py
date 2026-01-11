@@ -7,15 +7,16 @@ from datetime import datetime
 import pandas as pd
 import json
 
-class DashboardView(ttk.Window):
-    def __init__(self, controller=None):
-        super().__init__(themename="flatly")
+class DashboardView(ttk.Frame):
+    def __init__(self, master, controller=None):
+        super().__init__(master)
         self.controller = controller
         self.df_actual = None
         
-        # Configuración de la ventana
-        self.title("Sistema SIRE SUNAT - Dashboard")
-        self.geometry("1200x800")
+        # Configuración de la ventana principal
+        self.master.title("Sistema SIRE SUNAT - Dashboard")
+        self.master.geometry("1200x800")
+        self.master.resizable(True, True)
         
         # Configuración de columnas: {columna: (ancho, alineación)}
         self.COLUMN_CONFIG = {
@@ -192,11 +193,16 @@ class DashboardView(ttk.Window):
         numero = str(values[idx_numero])
 
         if col_name == 'VerDescripcion':
-            # Si el texto es "📥 OBTENER", iniciamos descarga
             current_text = str(values[keys.index('VerDescripcion')])
+            
+            # Si el texto es "📥 OBTENER", iniciamos descarga
             if "OBTENER" in current_text:
                 if self.controller:
                     self.controller.descargar_comprobante(ruc, serie, numero)
+            
+            # Si el texto es "verDescripcion", mostramos el cuadro de detalle
+            elif "verDescripcion" in current_text:
+                self._show_description_dialog(serie, numero)
         
         elif col_name == 'VerPDF':
             # Si el texto es "📄 PDF", abrimos
@@ -204,6 +210,69 @@ class DashboardView(ttk.Window):
             if "PDF" in current_text:
                 if self.controller:
                     self.controller.abrir_pdf(ruc, serie, numero)
+
+    def _show_description_dialog(self, serie, numero):
+        """
+        Muestra un modal con la lista completa de ítems del comprobante.
+        """
+        import os
+        import json
+        import tkinter as tk
+        
+        xml_desc_dir = os.path.join(os.getcwd(), 'downloads', 'xml')
+        json_path = os.path.join(xml_desc_dir, f"{serie}-{numero}.json")
+        
+        if not os.path.exists(json_path):
+            self.show_error("Error", "No se encontró el archivo de descripción.")
+            return
+
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                items = json.load(f)
+                
+            if not items:
+                self.show_info("Sin Detalles", "El archivo de descripción está vacío.")
+                return
+
+            # Crear ventana modal (Toplevel)
+            top = ttk.Toplevel(self)
+            top.title(f"Detalle: {serie}-{numero}")
+            top.geometry("700x500")
+            
+            # Contenedor principal
+            frame = ttk.Frame(top, padding=10)
+            frame.pack(fill=BOTH, expand=True)
+            
+            lbl_title = ttk.Label(frame, text=f"Items del Comprobante {serie}-{numero}", font=("Helvetica", 12, "bold"))
+            lbl_title.pack(pady=(0, 10))
+            
+            # Area de texto con scroll
+            txt_area = tk.Text(frame, wrap="word", font=("Consolas", 10))
+            vsb = ttk.Scrollbar(frame, orient="vertical", command=txt_area.yview)
+            txt_area.configure(yscrollcommand=vsb.set)
+            
+            txt_area.pack(side=LEFT, fill=BOTH, expand=True)
+            vsb.pack(side=RIGHT, fill=Y)
+            
+            # Formatear contenido
+            contenido = ""
+            for idx, item in enumerate(items, 1):
+                desc = item.get('descripcion', '-')
+                
+                # Aplicar formato de SUNAT
+                cant = format_quantity(item.get('cantidad', ''))
+                und = get_unit_description(item.get('unidad', ''))
+                
+                contenido += f"ITEM #{idx}\n"
+                contenido += f"DESCRIPCIÓN: {desc}\n"
+                contenido += f"CANTIDAD:    {cant} {und}\n"
+                contenido += "-" * 60 + "\n"
+                
+            txt_area.insert("1.0", contenido)
+            txt_area.config(state="disabled") # Solo lectura
+            
+        except Exception as e:
+            self.show_error("Error", f"No se pudo leer el detalle: {e}")
 
     def _create_kpi_card(self, parent, title, initial_value, color):
         card = ttk.Frame(parent, padding=10, bootstyle=f"{color}")
@@ -335,22 +404,27 @@ class DashboardView(ttk.Window):
                 txt_path = os.path.join(xml_desc_dir, f"{s}-{n}.txt")
                 
                 if os.path.exists(json_path):
+                    # CAMBIO: Ahora mostramos solo el enlace/botón para ver todo el detalle
+                    desc_text = "📄 verDescripcion"
+                    
+                    # Opcional: Extraer cantidad/unidad del primer item para mostrar en columnas Cant/Und
                     try:
                         with open(json_path, 'r', encoding='utf-8') as f:
                             items = json.load(f)
                             if items:
                                 first_item = items[0]
-                                desc_text = first_item.get('descripcion', '')
                                 cant_text = format_quantity(first_item.get('cantidad', ''))
                                 und_text = get_unit_description(first_item.get('unidad', ''))
                     except:
                         pass
+                        
                 elif os.path.exists(txt_path):
                     # Fallback para antiguos TXT
                     try:
                         with open(txt_path, 'r', encoding='utf-8') as f:
                             content = f.read().strip()
                             if content:
+                                # Aquí sí mostramos texto porque probablemente es corto/legacy
                                 desc_text = content
                     except:
                         pass
