@@ -3,9 +3,10 @@ from ttkbootstrap.constants import *
 from typing import Dict, Any
 
 class LoginView(ttk.Frame):
-    def __init__(self, master, controller):
+    def __init__(self, master, controller, prefill_data=None):
         super().__init__(master, padding=30)
         self.controller = controller
+        self.prefill_data = prefill_data or {}
         
         # Configurar ventana principal (master)
         self.master.title("Configuración de Acceso SUNAT")
@@ -46,6 +47,10 @@ class LoginView(ttk.Frame):
             
             if "clave" in key or "secret" in key:
                 entry.configure(show="•")
+                
+            # Pre-llenar si existe data
+            if key in self.prefill_data:
+                entry.insert(0, self.prefill_data[key])
                 
             self.entries[key] = entry
 

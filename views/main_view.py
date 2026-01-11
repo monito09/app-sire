@@ -51,6 +51,15 @@ class DashboardView(ttk.Frame):
         ttk.Label(header_frame, text="SIRE DOWNLOADER", font=("Helvetica", 20, "bold"), bootstyle="primary").pack(side=LEFT)
         ttk.Label(header_frame, text="v2.1", font=("Helvetica", 10), bootstyle="secondary").pack(side=LEFT, padx=10, pady=(10,0))
 
+        # Botón de Logout / Cambiar Cuenta
+        ttk.Button(
+            header_frame, 
+            text="Cambiar Cuenta", 
+            command=self._on_logout_click,
+            bootstyle="danger-outline",
+            width=15
+        ).pack(side=RIGHT)
+
         # 2. Barra de Acciones (Periodo + Botones)
         action_bar = ttk.Frame(self, padding=(20, 0, 20, 20))
         action_bar.pack(fill=X)
@@ -317,6 +326,10 @@ class DashboardView(ttk.Frame):
     def _on_exportar_click(self):
         if self.controller:
             self.controller.exportar_excel()
+
+    def _on_logout_click(self):
+        if self.controller:
+            self.controller.logout()
             
     def _on_search_change(self, *args):
         query = self.search_var.get().lower()

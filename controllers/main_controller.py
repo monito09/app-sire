@@ -45,14 +45,9 @@ class MainController:
         self.root.withdraw() # Ocultar hasta decidir qué mostrar
 
     def start(self) -> None:
-        """Punto de entrada: Determina si mostrar Login o Dashboard."""
-        if self._is_config_valid(self.config):
-            print("Configuración válida encontrada. Iniciando Dashboard.")
-            self._init_services(self.config)
-            self._start_dashboard()
-        else:
-            print("Configuración faltante o inválida. Iniciando Login.")
-            self._start_login()
+        """Punto de entrada: Siempre inicia en Login."""
+        # Cargamos config por defecto si existe, para pre-llenar el login
+        self._start_login(self.config)
         
         # Iniciar loop principal de la raíz
         self.root.mainloop()
@@ -61,13 +56,21 @@ class MainController:
         required = ["client_id", "client_secret", "ruc", "usuario_sol", "clave_sol"]
         return all(k in config and config[k] for k in required)
 
-    def _start_login(self) -> None:
+    def _start_login(self, prefill_data: Dict = None) -> None:
         self.root.deiconify() # Mostrar ventana
-        self.login_view = LoginView(self.root, self)
-        # LoginView ya se hace pack a sí mismo en su init o podemos hacerlo aquí
-        # En el paso anterior puse self.pack() en LoginView.__init__
-        # pero es buena práctica controlar el layout desde fuera si es posible.
-        # LoginView ya tiene un self.pack()
+        self.login_view = LoginView(self.root, self, prefill_data)
+
+    def logout(self) -> None:
+        """Cierra la sesión actual y vuelve al login."""
+        if self.view:
+            self.view.destroy()
+            self.view = None
+            
+        # Reiniciar servicios
+        self.auth_service = None
+        self.api_service = None
+        
+        self._start_login(self.config)
 
     def handle_login_attempt(self, credentials: Dict, save_local: bool) -> None:
         """Maneja el intento de login desde la vista."""
