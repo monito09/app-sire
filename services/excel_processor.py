@@ -178,10 +178,14 @@ class ExcelProcessor:
                             with open(json_path, 'r', encoding='utf-8') as f:
                                 items = json.load(f)
                                 if items:
-                                    first_item = items[0]
-                                    desc = first_item.get('descripcion', '')
-                                    cant = format_quantity(first_item.get('cantidad', ''))
-                                    und = get_unit_description(first_item.get('unidad', ''))
+                                    # Recorrer todos los items y unir con guiones
+                                    list_desc = [i.get('descripcion', '') for i in items]
+                                    list_cant = [format_quantity(i.get('cantidad', '')) for i in items]
+                                    list_und  = [get_unit_description(i.get('unidad', '')) for i in items]
+                                    
+                                    desc = " - ".join(list_desc)
+                                    cant = " - ".join(list_cant)
+                                    und = " - ".join(list_und)
                         elif os.path.exists(txt_path):
                             # Fallback
                             with open(txt_path, 'r', encoding='utf-8') as f:
