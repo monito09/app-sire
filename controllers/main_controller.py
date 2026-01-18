@@ -10,9 +10,10 @@ from services.auth_service import SunatAuthService
 from services.sunat_api import SunatApiService
 from services.excel_processor import ExcelProcessor
 from services.sunat_pdf_downloader import SunatPdfDownloader
+from repositories.file_repository import FileRepository
+from models.periodo import Periodo
 
 # Utils
-from utils.file_utils import ensure_directory_exists, get_file_path, file_exists
 from utils.logger_utils import format_log_message
 
 # Views
@@ -30,8 +31,13 @@ class MainController:
     def __init__(self) -> None:
         self.view: Any = None
         self.login_view: Any = None
-        self.config: Dict[str, Any] = self._load_config()
-        self._initialize_directories()
+        
+        # Inicializar Repositorio (manejo de archivos)
+        # Asumimos que la raíz del proyecto es el CWD o dos niveles arriba de este archivo
+        base_dir = os.getcwd()
+        self.repository = FileRepository(base_dir)
+        
+        self.config: Dict[str, Any] = self.repository.load_config()
         
         # Servicios se inicializan luego del login/config
         self.auth_service: Optional[SunatAuthService] = None
@@ -83,7 +89,7 @@ class MainController:
             # 2. Si pasa, guardamos y procedemos
             self.config = credentials
             if save_local:
-                self._save_config(credentials)
+                self.repository.save_config(credentials)
             
             self._init_services(self.config)
             
@@ -114,40 +120,11 @@ class MainController:
         self.auth_service = SunatAuthService(config)
         self.api_service = SunatApiService(self.auth_service)
         self.excel_processor = ExcelProcessor()
-        self.pdf_downloader = SunatPdfDownloader(config)
-
-    def _save_config(self, config: Dict) -> None:
-        try:
-            config_path = get_file_path(os.path.dirname(os.path.dirname(__file__)), 'config.json')
-            with open(config_path, 'w') as f:
-                json.dump(config, f, indent=4)
-        except Exception as e:
-            print(f"No se pudo guardar config.json: {e}")
+        self.pdf_downloader = SunatPdfDownloader(config, self.repository)
 
     def set_view(self, view: Any) -> None:
         """Asigna la vista principal al controlador."""
         self.view = view
-
-    def _load_config(self) -> Dict[str, Any]:
-        """Carga la configuración desde config.json."""
-        config_path = get_file_path(os.path.dirname(os.path.dirname(__file__)), 'config.json')
-        try:
-            with open(config_path, 'r') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {}
-
-    def _initialize_directories(self) -> None:
-        """Crea la estructura de carpetas necesaria usando file_utils."""
-        base_dir = os.getcwd()
-        dirs = [
-            get_file_path(base_dir, os.path.join('downloads', 'zip')),
-            get_file_path(base_dir, os.path.join('downloads', 'excel')),
-            get_file_path(base_dir, os.path.join('downloads', 'pdf')),
-            get_file_path(base_dir, os.path.join('downloads', 'xml'))
-        ]
-        for d in dirs:
-            ensure_directory_exists(d)
 
     def _run_async(self, target: Callable, *args: Any) -> None:
         """Ejecuta una función en un hilo separado para no congelar la UI."""
@@ -163,11 +140,10 @@ class MainController:
             return
 
         nombre_pdf = f"{serie}-{numero}.pdf"
-        ruta_pdf = get_file_path(os.path.join(os.getcwd(), 'downloads', 'pdf'), nombre_pdf)
         
-        if file_exists(ruta_pdf):
+        if self.repository.has_pdf(serie, numero):
             self.view.log(format_log_message(f"Abriendo PDF local: {nombre_pdf}"))
-            os.startfile(ruta_pdf)
+            os.startfile(self.repository.get_pdf_path(serie, numero))
         else:
             self.view.show_info("PDF No Disponible", "Primero debe descargar el comprobante desde la columna 'VerDescripcion'.")
 
@@ -244,21 +220,21 @@ class MainController:
             periodos_lista = []
             
             # 2. Procesar TODOS los periodos con su estado
-            for p in todos_los_periodos:
-                estado = p.get('desEstado', 'Sin estado')
-                periodo = p.get('perTributario')
-                
-                if periodo:
-                    periodos_lista.append({
-                        "periodo": periodo,
-                        "descripcion": f"{periodo} - {estado}"
-                    })
+            for p_dict in todos_los_periodos:
+                cod = p_dict.get('perTributario')
+                est = p_dict.get('desEstado', 'Sin estado')
+                if cod:
+                    periodo_obj = Periodo(codigo=cod, estado=est)
+                    periodos_lista.append(periodo_obj)
             
             # Ordenar por periodo descendente (más recientes primero)
-            periodos_lista.sort(key=lambda x: x['periodo'], reverse=True)
+            periodos_lista.sort(key=lambda x: x.codigo, reverse=True)
+            
+            # 3. Datos formateados para la vista
+            opciones_ui = [p.descripcion for p in periodos_lista]
             
             # 3. Actualizar UI (Thread-safe usando after)
-            self.view.after(0, lambda: self.view.actualizar_combo_periodos(periodos_lista))
+            self.view.after(0, lambda: self.view.actualizar_combo_periodos(opciones_ui))
             self.view.after(0, lambda: self.view.log(format_log_message(f"Se encontraron {len(periodos_lista)} periodos disponibles.")))
 
         except Exception as e:
@@ -302,6 +278,11 @@ class MainController:
                     self.excel_processor = ExcelProcessor() # Fallback safe
                     
                 df = self.excel_processor.procesar_zip(ruta_zip, update_log)
+                
+                # 4.1. ENRIQUECER CON ESTADO DE ARCHIVOS (Repository Check)
+                if df is not None and not df.empty:
+                    df['has_pdf'] = df.apply(lambda row: self.repository.has_pdf(str(row['Serie']), str(row['Numero'])), axis=1)
+                    df['has_detail'] = df.apply(lambda row: self.repository.has_json_detail(str(row['Serie']), str(row['Numero'])), axis=1)
                 
                 # 5. ACTUALIZAR VISTA
                 self.view.df_actual = df

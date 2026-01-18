@@ -1,88 +1,24 @@
 from playwright.sync_api import sync_playwright, Page, BrowserContext
 import time
 import os
-import zipfile
-import xml.etree.ElementTree as ET
-from typing import Optional, List, Any, Callable
+from typing import Any, Callable
 
-from utils.file_utils import ensure_directory_exists, get_file_path
-from utils.logger_utils import log_to_console
+from repositories.file_repository import FileRepository
+from services.xml_processor import XmlProcessor
 
 class SunatPdfDownloader:
     """
     Servicio encargado de interactuar con el portal SOL de SUNAT para
     descargar los comprobantes (PDF) y sus archivos XML asociados.
+    Ahora delega rutas a FileRepository y parseo a XmlProcessor.
     """
     
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, repository: FileRepository):
         self.ruc_sol = config["ruc"]
         self.usuario_sol = config["usuario_sol"]
         self.clave_sol = config["clave_sol"]
-
-    def _extract_description_from_zip(self, zip_path: str, output_dir: str, base_name: str) -> Optional[str]:
-        """
-        Extrae el XML del ZIP, busca datos (Descripción, Cantidad, Unidad) y los guarda en JSON.
-        """
-        try:
-            items_data = [] # Lista de dicts: {descripcion, cantidad, unidad}
-            
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                # Buscar archivos XML dentro del ZIP
-                xml_files = [f for f in zip_ref.namelist() if f.endswith('.xml')]
-                
-                for xml_file in xml_files:
-                    with zip_ref.open(xml_file) as xml_f:
-                        tree = ET.parse(xml_f)
-                        root = tree.getroot()
-                        
-                        # Namespaces comunes en UBL SUNAT
-                        namespaces = {
-                            'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
-                            'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'
-                        }
-                        
-                        # Buscar items (InvoiceLine o CreditNoteLine)
-                        lines = root.findall('.//cac:InvoiceLine', namespaces)
-                        if not lines:
-                            lines = root.findall('.//cac:CreditNoteLine', namespaces)
-                            
-                        for line in lines:
-                            item = line.find('cac:Item', namespaces)
-                            
-                            descripcion = ""
-                            if item is not None:
-                                desc_node = item.find('cbc:Description', namespaces)
-                                if desc_node is not None and desc_node.text:
-                                    descripcion = desc_node.text.strip()
-                            
-                            cantidad = ""
-                            unidad = ""
-                            qty_node = line.find('cbc:InvoicedQuantity', namespaces)
-                            if qty_node is None:
-                                qty_node = line.find('cbc:CreditedQuantity', namespaces) # Para notas de crédito
-                                
-                            if qty_node is not None:
-                                cantidad = qty_node.text.strip() if qty_node.text else ""
-                                unidad = qty_node.get('unitCode', "")
-                                
-                            items_data.append({
-                                "descripcion": descripcion,
-                                "cantidad": cantidad,
-                                "unidad": unidad
-                            })
-            
-            # Guardar en JSON (reemplaza al TXT antiguo)
-            if items_data:
-                json_path = get_file_path(output_dir, f"{base_name}.json")
-                with open(json_path, 'w', encoding='utf-8') as f:
-                    import json
-                    json.dump(items_data, f, ensure_ascii=False, indent=2)
-                return json_path
-            return None
-            
-        except Exception as e:
-            print(f"Error extrayendo XML: {e}")
-            return None
+        self.repository = repository
+        self.xml_processor = XmlProcessor()
 
     def _init_browser_session(self, p: Any) -> tuple[Any, Any, Page]:
         """Inicia la sesión de navegador con configuración anti-detección."""
@@ -114,7 +50,10 @@ class SunatPdfDownloader:
         page.goto("https://api-seguridad.sunat.gob.pe/v1/clientessol/4f3b88b3-d9d6-402a-b85d-6a0bc857746a/oauth2/loginMenuSol?lang=es-PE&showDni=true&showLanguages=false&originalUrl=https://e-menu.sunat.gob.pe/cl-ti-itmenu/AutenticaMenuInternet.htm&state=rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcAUH2sHDFmDRAwACRgAKbG9hZEZhY3RvckkACXRocmVzaG9sZHhwP0AAAAAAAAx3CAAAABAAAAADdAADZXhlcHQABnBhcmFtc3QASyomKiYvY2wtdGktaXRtZW51L01lbnVJbnRlcm5ldC5odG0mYjY0ZDI2YThiNWFmMDkxOTIzYjIzYjY0MDdhMWMxZGI0MWU3MzNhNnQABGV4ZWNweA==")
         
         page.fill("#txtRuc", self.ruc_sol)
+        # Pequeña pausa humana
+        time.sleep(0.5)
         page.fill("#txtUsuario", self.usuario_sol)
+        time.sleep(0.5)
         page.fill("#txtContrasena", self.clave_sol)
         page.click("#btnAceptar")
 
@@ -124,19 +63,25 @@ class SunatPdfDownloader:
         try:
             iframe_campana = page.frame_locator("#ifrVCE")
             
-            # Click en Finalizar
-            btn_finalizar = iframe_campana.get_by_role("button", name="Finalizar")
-            btn_finalizar.wait_for(state="visible", timeout=10000)
-            btn_finalizar.click()
-            print("✓ Modal 'Finalizar' cerrado.")
+            # Click en Finalizar si existe
+            try:
+                btn_finalizar = iframe_campana.get_by_role("button", name="Finalizar")
+                if btn_finalizar.is_visible(timeout=3000):
+                    btn_finalizar.click()
+                    print("✓ Modal 'Finalizar' cerrado.")
+            except:
+                pass
 
             # Click en Continuar sin confirmar
-            btn_continuar = iframe_campana.get_by_text("Continuar sin confirmar")
-            btn_continuar.wait_for(state="visible", timeout=5000)
-            btn_continuar.click()
-            print("✓ Pantalla de validación saltada.")
+            try:
+                btn_continuar = iframe_campana.get_by_text("Continuar sin confirmar")
+                if btn_continuar.is_visible(timeout=3000):
+                    btn_continuar.click()
+                    print("✓ Pantalla de validación saltada.")
+            except:
+                pass
             
-            time.sleep(2) 
+            time.sleep(1) 
         except Exception:
             print("- No se detectó el modal o tardó demasiado. Continuando...")
 
@@ -255,28 +200,20 @@ class SunatPdfDownloader:
                 callback_status("⚠️ Botón XML no visible.")
         except Exception as ex_xml:
             callback_status(f"⚠️ Error descargando XML: {ex_xml}")
-            # No bloqueamos si falla el XML
 
     def download_pdf(self, ruc_emisor: str, serie: str, numero: str, callback_status: Callable) -> str:
         """
-        Descarga el PDF y el XML de la factura usando Playwright.
-        Retorna la ruta del PDF descargado.
+        Descarga el PDF y el XML de la factura.
+        Usa FileRepository para determinar rutas.
+        Usa XmlProcessor para extraer descripción.
         """
         callback_status(f"Iniciando descarga de PDF y XML {serie}-{numero} de {ruc_emisor}...")
         
-        # Preparar directorios
-        base_dir = os.getcwd()
-        pdf_dir = get_file_path(base_dir, os.path.join('downloads', 'pdf'))
-        xml_dir = get_file_path(base_dir, os.path.join('downloads', 'xml'))
-        zip_dir = get_file_path(base_dir, os.path.join('downloads', 'zip'))
-        
-        ensure_directory_exists(pdf_dir)
-        ensure_directory_exists(xml_dir)
-        ensure_directory_exists(zip_dir)
-
-        nombre_base = f"{serie}-{numero}"
-        target_pdf_path = get_file_path(pdf_dir, f"{nombre_base}.pdf")
-        target_zip_path = get_file_path(zip_dir, f"{nombre_base}.zip")
+        # Obtener rutas destinadas desde el repositorio
+        target_pdf_path = self.repository.get_pdf_path(serie, numero)
+        # El ZIP temporal lo manejamos nosotros o el repo, pero XmlProcessor necesita el ZIP
+        # Asumiremos que el ZIP se descarga en la carpeta ZIP del repo
+        target_zip_path = os.path.join(self.repository.zip_dir, f"{serie}-{numero}.zip")
 
         with sync_playwright() as p:
             browser, context, page = self._init_browser_session(p)
@@ -288,8 +225,11 @@ class SunatPdfDownloader:
                 self._perform_file_downloads(page, app_frame, target_pdf_path, target_zip_path, callback_status)
 
                 # Extraer descripción si se descargó el XML
+                # Usamos el path del JSON final desde el repositorio
+                target_json_path = self.repository.get_json_detail_path(serie, numero)
+                
                 if os.path.exists(target_zip_path):
-                     self._extract_description_from_zip(target_zip_path, xml_dir, nombre_base)
+                     self.xml_processor.extract_description_from_zip(target_zip_path, target_json_path)
                 
                 callback_status(f"✓ ¡ÉXITO! Proceso completado.")
                 return target_pdf_path
@@ -299,3 +239,4 @@ class SunatPdfDownloader:
                 raise e
             finally:
                 browser.close()
+

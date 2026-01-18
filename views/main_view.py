@@ -5,7 +5,6 @@ from ttkbootstrap.tableview import Tableview
 from tkinter import filedialog
 from datetime import datetime
 import pandas as pd
-import json
 
 class DashboardView(ttk.Frame):
     def __init__(self, master, controller=None):
@@ -224,23 +223,15 @@ class DashboardView(ttk.Frame):
         """
         Muestra un modal con la lista completa de ítems del comprobante.
         """
-        import os
-        import json
-        import tkinter as tk
-        
-        xml_desc_dir = os.path.join(os.getcwd(), 'downloads', 'xml')
-        json_path = os.path.join(xml_desc_dir, f"{serie}-{numero}.json")
-        
-        if not os.path.exists(json_path):
-            self.show_error("Error", "No se encontró el archivo de descripción.")
+        if not self.controller:
             return
 
         try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                items = json.load(f)
+            # Delegar al controlador la obtención de datos
+            items = self.controller.get_invoice_detail(serie, numero)
                 
             if not items:
-                self.show_info("Sin Detalles", "El archivo de descripción está vacío.")
+                self.show_info("Sin Detalles", "El archivo de descripción está vacío o no existe.")
                 return
 
             # Crear ventana modal (Toplevel)
@@ -256,6 +247,7 @@ class DashboardView(ttk.Frame):
             lbl_title.pack(pady=(0, 10))
             
             # Area de texto con scroll
+            import tkinter as tk # Needed for Text widget
             txt_area = tk.Text(frame, wrap="word", font=("Consolas", 10))
             vsb = ttk.Scrollbar(frame, orient="vertical", command=txt_area.yview)
             txt_area.configure(yscrollcommand=vsb.set)
@@ -372,11 +364,6 @@ class DashboardView(ttk.Frame):
         
         # Insertar filas (limitado a 500 para UI fluida con tkinter puro)
         max_rows = 1000
-        
-        # Directorio de PDFs
-        import os
-        pdf_dir = os.path.join(os.getcwd(), 'downloads', 'pdf')
-        xml_desc_dir = os.path.join(os.getcwd(), 'downloads', 'xml')
 
         # Calcular antigüedad del periodo para advertencias
         # Si tiene > 24 meses, SUNAT restringe descarga de PDF/XML
@@ -404,43 +391,20 @@ class DashboardView(ttk.Frame):
             und_text = ""
 
             if 'Serie' in row and 'Numero' in row:
-                s = str(row['Serie'])
-                n = str(row['Numero'])
-                
-                # PDF
-                path = os.path.join(pdf_dir, f"{s}-{n}.pdf")
-                if os.path.exists(path):
+                # PDF (Usando pre-calculado por controller)
+                if row.get('has_pdf', False):
                     estado_pdf = "📄 PDF"
                 
-                # Datos Extraídos (JSON > TXT)
-                json_path = os.path.join(xml_desc_dir, f"{s}-{n}.json")
-                txt_path = os.path.join(xml_desc_dir, f"{s}-{n}.txt")
-                
-                if os.path.exists(json_path):
-                    # CAMBIO: Ahora mostramos solo el enlace/botón para ver todo el detalle
+                # Datos Extraídos (Usando pre-calculado por controller)
+                if row.get('has_detail', False):
                     desc_text = "📄 verDescripcion"
                     
-                    # Opcional: Extraer cantidad/unidad del primer item para mostrar en columnas Cant/Und
-                    try:
-                        with open(json_path, 'r', encoding='utf-8') as f:
-                            items = json.load(f)
-                            if items:
-                                first_item = items[0]
-                                cant_text = format_quantity(first_item.get('cantidad', ''))
-                                und_text = get_unit_description(first_item.get('unidad', ''))
-                    except:
-                        pass
-                        
-                elif os.path.exists(txt_path):
-                    # Fallback para antiguos TXT
-                    try:
-                        with open(txt_path, 'r', encoding='utf-8') as f:
-                            content = f.read().strip()
-                            if content:
-                                # Aquí sí mostramos texto porque probablemente es corto/legacy
-                                desc_text = content
-                    except:
-                        pass
+                    # Opcional: Obtener detalle (esto es lento si es uno por uno, mejor solo bajo demanda)
+                    # Si queremos mostrar Cant/Und en la tabla, necesitamos los datos.
+                    # Por ahora dejaremos vacío para no saturar lectura de disco, 
+                    # O podríamos pedirle al controller que nos de 'first_item' si quisiéramos.
+                    # Mantendremos la lógica simple: si hay detalle, botoncito funciona.
+
 
             for col in cols:
                 # Si la columna es PDFAccion, usamos el valor calculado
