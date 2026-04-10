@@ -196,10 +196,13 @@ class DashboardView(ttk.Frame):
         idx_ruc = keys.index('RucProveedor')
         idx_serie = keys.index('Serie')
         idx_numero = keys.index('Numero')
+        # Extraer tipo de documento para seleccionar el tipo correcto en el portal de SUNAT
+        idx_tipo = keys.index('TipoDocProveedor') if 'TipoDocProveedor' in keys else -1
         
         ruc = str(values[idx_ruc])
         serie = str(values[idx_serie])
         numero = str(values[idx_numero])
+        tipo_doc = str(values[idx_tipo]) if idx_tipo >= 0 else "01"
 
         if col_name == 'VerDescripcion':
             current_text = str(values[keys.index('VerDescripcion')])
@@ -207,7 +210,7 @@ class DashboardView(ttk.Frame):
             # Si el texto es "📥 OBTENER", iniciamos descarga
             if "OBTENER" in current_text:
                 if self.controller:
-                    self.controller.descargar_comprobante(ruc, serie, numero)
+                    self.controller.descargar_comprobante(ruc, serie, numero, tipo_doc)
             
             # Si el texto es "verDescripcion", mostramos el cuadro de detalle
             elif "verDescripcion" in current_text:

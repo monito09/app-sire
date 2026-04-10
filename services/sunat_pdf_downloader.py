@@ -166,7 +166,7 @@ class SunatPdfDownloader:
             callback_status(f"Fallo en navegación del menú: {e}")
             raise e
 
-    def _fill_consultation_form(self, page: Page, ruc_emisor: str, serie: str, numero: str, callback_status: Callable) -> Any:
+    def _fill_consultation_form(self, page: Page, ruc_emisor: str, serie: str, numero: str, callback_status: Callable, tipo_label: str = "Factura") -> Any:
         """Llena el formulario de consulta de comprobantes."""
         callback_status("Buscando formulario...")
         app_frame = page.frame_locator("#iframeApplication")
@@ -191,21 +191,23 @@ class SunatPdfDownloader:
             txt_ruc.fill(ruc_emisor)
             callback_status(f"✓ RUC {ruc_emisor} ingresado.")
 
-            # Selector de Tipo (PrimeNG)
+            # Selector de Tipo (PrimeNG) — dinámico según tipo de comprobante
             dropdown_tipo = app_frame.locator("p-dropdown[formcontrolname='tipoComprobanteI']")
             dropdown_tipo.wait_for(state="visible", timeout=10000)
             dropdown_tipo.click()
             
             buscador_interno = app_frame.locator("input.p-dropdown-filter")
             buscador_interno.wait_for(state="visible", timeout=5000)
-            buscador_interno.fill("Factura")
+            buscador_interno.fill(tipo_label)
             
             time.sleep(1.5)
             
-            opcion_factura = app_frame.get_by_role("option", name="Factura", exact=True)
-            opcion_factura.wait_for(state="visible", timeout=5000)
-            opcion_factura.click()
-            callback_status("✓ 'Factura' seleccionada.")
+            # exact=True es crítico: evita seleccionar "Factura - Nota de Crédito"
+            # cuando se busca "Factura", ya que ambas contienen esa palabra.
+            opcion = app_frame.get_by_role("option", name=tipo_label, exact=True)
+            opcion.wait_for(state="visible", timeout=5000)
+            opcion.click()
+            callback_status(f"✓ '{tipo_label}' seleccionado.")
             
             # Serie y Número
             app_frame.locator("input[formcontrolname='serieComprobante'], #serie").first.fill(serie)
@@ -257,12 +259,29 @@ class SunatPdfDownloader:
             callback_status(f"⚠️ Error descargando XML: {ex_xml}")
             # No bloqueamos si falla el XML
 
-    def download_pdf(self, ruc_emisor: str, serie: str, numero: str, callback_status: Callable) -> str:
+    def _get_tipo_label(self, tipo_doc: str) -> str:
         """
-        Descarga el PDF y el XML de la factura usando Playwright.
+        Retorna la palabra clave de búsqueda para filtrar el dropdown
+        del portal SUNAT (Consulta de Comprobantes de Pago).
+        Se usa una palabra clave corta y única para cada tipo, lo que
+        hace la búsqueda robusta sin importar mayúsculas/minúsculas del portal.
+        """
+        TIPOS = {
+            "01": "Factura",
+            "03": "Boleta de venta",
+            "07": "Factura - Nota de Crédito",   # Label exacto confirmado en portal SUNAT
+            "08": "Nota de Débito",
+        }
+        return TIPOS.get(str(tipo_doc).strip(), "Factura")
+
+    def download_pdf(self, ruc_emisor: str, serie: str, numero: str, callback_status: Callable, tipo_doc: str = "01") -> str:
+        """
+        Descarga el PDF y el XML del comprobante usando Playwright.
+        Soporta Facturas (01), Boletas (03), Notas de Crédito (07) y Notas de Débito (08).
         Retorna la ruta del PDF descargado.
         """
-        callback_status(f"Iniciando descarga de PDF y XML {serie}-{numero} de {ruc_emisor}...")
+        tipo_label = self._get_tipo_label(tipo_doc)
+        callback_status(f"Iniciando descarga de PDF y XML {serie}-{numero} [{tipo_label}] de {ruc_emisor}...")
         
         # Preparar directorios
         base_dir = os.getcwd()
@@ -284,7 +303,8 @@ class SunatPdfDownloader:
                 self._login(page, callback_status)
                 self._handle_popups(page)
                 self._navigate_to_voucher_lookup(page, callback_status)
-                app_frame = self._fill_consultation_form(page, ruc_emisor, serie, numero, callback_status)
+                # Pasar tipo_label para selección dinámica en el formulario
+                app_frame = self._fill_consultation_form(page, ruc_emisor, serie, numero, callback_status, tipo_label)
                 self._perform_file_downloads(page, app_frame, target_pdf_path, target_zip_path, callback_status)
 
                 # Extraer descripción si se descargó el XML

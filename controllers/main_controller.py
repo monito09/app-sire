@@ -171,9 +171,10 @@ class MainController:
         else:
             self.view.show_info("PDF No Disponible", "Primero debe descargar el comprobante desde la columna 'VerDescripcion'.")
 
-    def descargar_comprobante(self, ruc_proveedor: str, serie: str, numero: str) -> None:
+    def descargar_comprobante(self, ruc_proveedor: str, serie: str, numero: str, tipo_doc: str = "01") -> None:
         """
         Inicia la descarga del PDF y XML.
+        tipo_doc: Código SUNAT del tipo de documento (01=Factura, 03=Boleta, 07=NC, 08=ND)
         """
         if not self.pdf_downloader:
             self.view.show_error("Error", "Servicio de descarga no inicializado.")
@@ -181,14 +182,14 @@ class MainController:
 
         self.view.log(format_log_message(f"Iniciando descarga para {serie}-{numero}..."))
         self.view.set_loading(True)
-        self._run_async(self._worker_descargar_pdf, ruc_proveedor, serie, numero)
+        self._run_async(self._worker_descargar_pdf, ruc_proveedor, serie, numero, tipo_doc)
 
-    def _worker_descargar_pdf(self, ruc_proveedor: str, serie: str, numero: str) -> None:
+    def _worker_descargar_pdf(self, ruc_proveedor: str, serie: str, numero: str, tipo_doc: str = "01") -> None:
         try:
             def update_log(msg: str) -> None:
                 self.view.after(0, lambda: self.view.log(format_log_message(msg)))
             
-            ruta_pdf = self.pdf_downloader.download_pdf(ruc_proveedor, serie, numero, update_log)
+            ruta_pdf = self.pdf_downloader.download_pdf(ruc_proveedor, serie, numero, update_log, tipo_doc)
             
             update_log(f"✅ Descarga completada: {ruta_pdf}")
             
@@ -197,8 +198,13 @@ class MainController:
                 self.view.after(0, lambda: self.view.mostrar_datos_tabla(self.view.df_actual))
             
         except Exception as e:
-            update_log(f"❌ Error descargando PDF: {str(e)}")
-            self.view.after(0, lambda: self.view.show_error("Error de Descarga", f"No se pudo descargar el PDF.\n\nDetalle: {str(e)}"))
+            # IMPORTANTE: capturar el mensaje ANTES de la lambda para evitar
+            # NameError por closure de 'e' en el hilo de Tkinter
+            error_msg = str(e)
+            update_log(f"❌ Error descargando PDF: {error_msg}")
+            self.view.after(0, lambda msg=error_msg: self.view.show_error(
+                "Error de Descarga", f"No se pudo descargar el PDF.\n\nDetalle: {msg}"
+            ))
         finally:
             self.view.after(0, lambda: self.view.set_loading(False))
 

@@ -9,7 +9,7 @@ class ExcelProcessor:
     COLUMN_MAPPING = {
         13: 'RazonSocialProveedor',
         12: 'RucProveedor', 
-        11: 'TipoDocProveedor',         
+        6:  'TipoDocProveedor',   # CodTipoCDP: 01=Factura, 03=Boleta, 07=NC, 08=ND
         4: 'FechaEmision',
         5: 'FechaVencimiento',
         25: 'Moneda',
