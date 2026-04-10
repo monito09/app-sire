@@ -224,8 +224,17 @@ class SunatPdfDownloader:
 
     def _perform_file_downloads(self, page: Page, app_frame: Any, target_pdf_path: str, target_zip_path: str, callback_status: Callable) -> None:
         """Ejecuta la descarga del PDF y XML."""
-        callback_status("Esperando resultado...")
-        app_frame.get_by_text("Resultado", exact=True).wait_for(state="visible", timeout=20000)
+        callback_status("Esperando resultado de búsqueda...")
+        
+        try:
+            app_frame.get_by_text("Resultado", exact=True).wait_for(state="visible", timeout=15000)
+        except Exception as e:
+            # Revisar si SUNAT devolvió un mensaje de "No hay resultados"
+            if app_frame.get_by_text("No hay resultados", exact=False).is_visible(timeout=1000):
+                raise Exception("La SUNAT indica que 'No hay resultados para la consulta'.\n\nEl comprobante podría no estar disponible en consulta inmediata o los datos de tipo/serie son distintos en dicho portal.")
+            else:
+                raise Exception(f"Timeout esperando la tabla de resultados. Error interno SUNAT o demora extrema.")
+
         
         # 1. Descargar PDF
         btn_pdf = app_frame.locator("button[ngbtooltip='Descargar PDF']").first
@@ -259,20 +268,40 @@ class SunatPdfDownloader:
             callback_status(f"⚠️ Error descargando XML: {ex_xml}")
             # No bloqueamos si falla el XML
 
-    def _get_tipo_label(self, tipo_doc: str) -> str:
+    def _get_tipo_label(self, tipo_doc: str, serie: str) -> str:
         """
         Retorna la palabra clave de búsqueda para filtrar el dropdown
         del portal SUNAT (Consulta de Comprobantes de Pago).
-        Se usa una palabra clave corta y única para cada tipo, lo que
-        hace la búsqueda robusta sin importar mayúsculas/minúsculas del portal.
+        Dinamismo extra para distinguir "Factura" vs "Boleta" en Notas de Crédito y Débito
+        en base a la regla: las Boletas y sus notas inician con 'B'.
         """
-        TIPOS = {
-            "01": "Factura",
-            "03": "Boleta de venta",
-            "07": "Factura - Nota de Crédito",   # Label exacto confirmado en portal SUNAT
-            "08": "Nota de Débito",
-        }
-        return TIPOS.get(str(tipo_doc).strip(), "Factura")
+        # Limpiar cualquier cosa como '7' o '7.0' -> '07'
+        tipo = str(tipo_doc).strip().replace(".0", "")
+        if tipo.isdigit():
+            tipo = tipo.zfill(2)
+
+        s_upper = str(serie).strip().upper()
+        
+        if tipo == "01":
+            return "Factura"
+        elif tipo == "03":
+            return "Boleta de venta"
+        elif tipo == "07":
+            if s_upper.startswith("B"):
+                return "Boleta de Venta - Nota de Crédito"
+            elif s_upper.startswith("T"):
+                return "Ticket POS - Nota de Crédito"
+            else:
+                return "Factura - Nota de Crédito"
+        elif tipo == "08":
+            if s_upper.startswith("B"):
+                return "Boleta de Venta - Nota de Débito"
+            elif s_upper.startswith("T"):
+                return "Ticket POS - Nota de Débito"
+            else:
+                return "Factura - Nota de Débito"
+        
+        return "Factura"
 
     def download_pdf(self, ruc_emisor: str, serie: str, numero: str, callback_status: Callable, tipo_doc: str = "01") -> str:
         """
@@ -280,7 +309,7 @@ class SunatPdfDownloader:
         Soporta Facturas (01), Boletas (03), Notas de Crédito (07) y Notas de Débito (08).
         Retorna la ruta del PDF descargado.
         """
-        tipo_label = self._get_tipo_label(tipo_doc)
+        tipo_label = self._get_tipo_label(tipo_doc, serie)
         callback_status(f"Iniciando descarga de PDF y XML {serie}-{numero} [{tipo_label}] de {ruc_emisor}...")
         
         # Preparar directorios
